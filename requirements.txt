@@ -1,0 +1,13 @@
+# ── Fake News & Source Credibility Detector — Combined Dev Requirements ────
+#
+# This is a convenience file that installs EVERYTHING (API + training).
+# For deployment use the split files instead:
+#   • requirements.api.txt   — inference / API server only (smaller image)
+#   • requirements.train.txt — adds DeBERTa/Mistral training + evaluation deps
+#
+# Install everything for local development:
+#   pip install -r requirements.txt
+#
+# requirements.train.txt already pulls in requirements.api.txt via -r.
+
+-r requirements.train.txt

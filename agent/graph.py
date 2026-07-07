@@ -182,14 +182,17 @@ def node_score(state: AgentState) -> AgentState:
     d_upper  = state.get("deberta_upper", d_score + 0.15)
 
     if fc_score is not None:
-        # Weight: 0.6 DeBERTa + 0.4 fact-check when FC available
+        # Weight: 0.6 DeBERTa + 0.4 fact-check when a verdict is available.
         fused = 0.6 * d_score + 0.4 * fc_score
-        # Narrow CI when FC confirms DeBERTa
-        agreement = 1.0 - abs(d_score - fc_score)
-        ci_shrink  = 0.7 + 0.3 * agreement
-        fused_lower = max(0.0, (d_lower + fc_score * 0.4) * ci_shrink)
-        fused_upper = min(1.0, (d_upper + fc_score * 0.4) * ci_shrink / fused
-                         * fused if fused > 0 else d_upper)
+        # Re-centre the DeBERTa confidence interval on the fused score, then
+        # shrink its width when the fact-check agrees (agreement → 1 narrows to
+        # 70% of the original width; full disagreement keeps the full width).
+        half_width = (d_upper - d_lower) / 2.0
+        agreement  = 1.0 - abs(d_score - fc_score)   # 1.0 = identical scores
+        ci_shrink  = 0.7 + 0.3 * (1.0 - agreement)   # ∈ [0.7, 1.0]
+        half_width *= ci_shrink
+        fused_lower = fused - half_width
+        fused_upper = fused + half_width
     else:
         fused       = d_score
         fused_lower = d_lower
@@ -198,8 +201,8 @@ def node_score(state: AgentState) -> AgentState:
     fused = round(max(0.0, min(1.0, fused)), 4)
     return {**state,
             "fused_score":  fused,
-            "fused_lower":  round(max(0.0, fused_lower), 4),
-            "fused_upper":  round(min(1.0, fused_upper), 4)}
+            "fused_lower":  round(max(0.0, min(1.0, fused_lower)), 4),
+            "fused_upper":  round(max(0.0, min(1.0, fused_upper)), 4)}
 
 
 async def node_reason(state: AgentState) -> AgentState:

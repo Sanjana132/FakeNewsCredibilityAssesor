@@ -32,7 +32,6 @@ Run:
 
 import argparse
 import json
-import pickle
 import warnings
 from pathlib import Path
 
@@ -47,9 +46,8 @@ import pandas as pd
 import shap
 from scipy.stats import pearsonr, spearmanr
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import Ridge, RidgeCV
+from sklearn.linear_model import RidgeCV
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from scipy.sparse import hstack, csr_matrix
 import joblib
@@ -112,22 +110,28 @@ def load_split(name: str) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_tfidf_matrix(train_texts, val_texts, test_texts,
-                        max_features: int = 50_000, ngram_range=(1, 2)):
+                        max_features: int = 50_000, ngram_range=(1, 3),
+                        min_df: int = 2, max_df: float = 0.9):
     """
     Fit TF-IDF on train, transform val and test.
 
-    Hyperparameters chosen:
+    Hyperparameters chosen (tuned for lower val MAE):
     • max_features=50k — large enough for political/scientific vocabulary
-    • ngram_range=(1,2) — captures "not true", "50 percent", "peer reviewed"
+    • ngram_range=(1,3) — trigrams add "not enough info", "half of all",
+      "no evidence that" — high-signal phrases for credibility
     • sublinear_tf=True — log-normalise term frequencies (standard for short text)
     • min_df=2 — ignore terms appearing only once (noise)
+    • max_df=0.9 — drop terms in >90% of docs (near-stopwords that add no signal
+      and otherwise soak up Ridge weight, nudging MAE up)
     """
-    print(f"  Fitting TF-IDF (max={max_features:,}, ngram={ngram_range})…")
+    print(f"  Fitting TF-IDF (max={max_features:,}, ngram={ngram_range}, "
+          f"min_df={min_df}, max_df={max_df})…")
     vectorizer = TfidfVectorizer(
         max_features=max_features,
         ngram_range=ngram_range,
         sublinear_tf=True,
-        min_df=2,
+        min_df=min_df,
+        max_df=max_df,
         strip_accents="unicode",
         analyzer="word",
     )
@@ -138,26 +142,11 @@ def build_tfidf_matrix(train_texts, val_texts, test_texts,
     return vectorizer, X_train, X_val, X_test
 
 
-def append_engineered_features(X_sparse, df: pd.DataFrame):
-    """
-    Horizontally concatenate sparse TF-IDF matrix with dense engineered features.
-    StandardScaler normalises the dense features to prevent TF-IDF values
-    (tiny floats) being dominated by raw word counts.
-    Returns: concatenated sparse matrix, fitted scaler
-    """
-    dense = df[ENGINEERED_FEATURES].fillna(0).values
-    scaler = StandardScaler()
-    dense_scaled = scaler.fit_transform(dense) if X_sparse is None else dense
-    dense_sparse = csr_matrix(dense_scaled)
-    combined = hstack([X_sparse, dense_sparse])
-    return combined, scaler
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. MODEL TRAINING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def train_ridge(X_train, y_train) -> Ridge:
+def train_ridge(X_train, y_train) -> RidgeCV:
     """
     RidgeCV finds the best regularisation alpha on training data via LOOCV.
     Ridge chosen over Lasso because:
@@ -204,6 +193,37 @@ def evaluate(model, X, y_true, split_name: str) -> dict:
     print(f"  [{split_name}] MAE={mae:.4f}  RMSE={rmse:.4f}  "
           f"r={pr:.4f}  F1={f1:.4f}")
     return metrics
+
+
+def evaluate_per_dataset(model, X, df: pd.DataFrame) -> dict:
+    """
+    Break down MAE / F1 by source dataset. Shows whether the baseline's headline
+    number is propped up by an easy corpus (FEVER) while it struggles on the hard
+    political claims (LIAR-2) — the same slice DeBERTa is expected to win on.
+    """
+    from sklearn.metrics import f1_score
+    if "dataset" not in df.columns:
+        return {}
+    y_pred = np.clip(model.predict(X), 0.0, 1.0)
+    y_true = df["credibility_score"].values
+    out = {}
+    print("\n  Per-dataset test breakdown:")
+    print(f"  {'dataset':<12} {'n':>7} {'MAE':>8} {'F1':>8}")
+    print(f"  {'─'*12} {'─'*7} {'─'*8} {'─'*8}")
+    for ds in sorted(df["dataset"].unique()):
+        mask = (df["dataset"] == ds).values
+        if mask.sum() < 5:
+            continue
+        yt, yp = y_true[mask], y_pred[mask]
+        mae = float(mean_absolute_error(yt, yp))
+        try:
+            f1 = float(f1_score(bucket(yt), bucket(yp), average="macro"))
+        except ValueError:
+            f1 = float("nan")
+        out[ds] = {"n": int(mask.sum()), "MAE": round(mae, 4),
+                   "Macro_F1_3class": round(f1, 4)}
+        print(f"  {ds:<12} {int(mask.sum()):>7,} {mae:>8.4f} {f1:>8.4f}")
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -351,6 +371,10 @@ def main():
                     help="Run ablation: text-only vs text+features")
     ap.add_argument("--no-shap",  action="store_true",
                     help="Skip SHAP (faster for large datasets)")
+    ap.add_argument("--max-features", type=int, default=50_000,
+                    help="TF-IDF vocabulary cap (default 50k)")
+    ap.add_argument("--ngram-max",    type=int, default=3,
+                    help="Max n-gram size, e.g. 3 → (1,3) (default 3)")
     args = ap.parse_args()
 
     print("=" * 60)
@@ -369,7 +393,8 @@ def main():
 
     # ── Build features ────────────────────────────────────────────────────
     vectorizer, X_tr, X_va, X_te = build_tfidf_matrix(
-        train_df["text_tfidf"], val_df["text_tfidf"], test_df["text_tfidf"]
+        train_df["text_tfidf"], val_df["text_tfidf"], test_df["text_tfidf"],
+        max_features=args.max_features, ngram_range=(1, args.ngram_max),
     )
 
     # Append engineered features (scaled dense → sparse → hstack)
@@ -397,6 +422,9 @@ def main():
     val_metrics   = evaluate(model, X_va_full, y_val,   "val")
     test_metrics  = evaluate(model, X_te_full, y_test,  "test")
 
+    # Per-dataset breakdown on the test split
+    per_dataset = evaluate_per_dataset(model, X_te_full, test_df)
+
     results = {
         "model":      "TF-IDF + Ridge (with engineered features)",
         "alpha":      model.alpha_,
@@ -404,6 +432,7 @@ def main():
         "train":      train_metrics,
         "val":        val_metrics,
         "test":       test_metrics,
+        "per_dataset": per_dataset,
         "benchmark_mae": val_metrics["MAE"],  # DeBERTa must beat this
     }
 
