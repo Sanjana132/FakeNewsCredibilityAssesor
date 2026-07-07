@@ -1,0 +1,31 @@
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+
+WORKDIR /app
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-dev python3-pip curl git && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python deps (training + LLM inference)
+COPY requirements.train.txt .
+RUN pip install --no-cache-dir -r requirements.train.txt
+
+# Application code
+COPY llm_finetune.py .
+COPY utils/ ./utils/
+COPY api/llm_server.py ./api/llm_server.py
+COPY api/__init__.py   ./api/__init__.py
+
+# HuggingFace model cache (mount as volume)
+ENV HF_HOME=/app/hf_cache \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8001
+
+HEALTHCHECK --interval=60s --timeout=15s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8001/health || exit 1
+
+CMD ["uvicorn", "api.llm_server:app", "--host", "0.0.0.0", \
+     "--port", "8001", "--log-level", "info"]
