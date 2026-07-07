@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir streamlit gradio requests
+
+COPY gradio_app.py .
+COPY utils/ ./utils/
+COPY config.py .
+
+EXPOSE 7860
+
+ENV PYTHONUNBUFFERED=1 \
+    API_URL=http://api:8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:7860/ || exit 1
+
+CMD ["python", "gradio_app.py", "--port", "7860"]

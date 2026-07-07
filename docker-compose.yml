@@ -1,0 +1,118 @@
+version: "3.9"
+
+# ── Fake News & Source Credibility Detector — Full Stack ───────────────────
+#
+# Services:
+#   redis   — result cache + feedback queue
+#   api     — FastAPI inference server (DeBERTa + ensemble, port 8000)
+#   llm     — Mistral-7B explanation server (GPU required, port 8001)
+#   admin   — Gradio demo UI (port 7860)
+#
+# Run:
+#   docker compose up redis api admin          # CPU-only (DeBERTa via MPS/CPU)
+#   docker compose up                         # full stack with GPU LLM server
+#
+# GPU passthrough:
+#   Requires nvidia-docker2 or Docker Desktop with GPU support.
+#   Remove the `deploy` block from `llm` service if no GPU is available.
+#
+# Env:
+#   Copy .env.example to .env and fill in API keys.
+# ────────────────────────────────────────────────────────────────────────────
+
+x-common-env: &common-env
+  API_KEY: ${API_KEY:-}
+  GOOGLE_FACTCHECK_API_KEY: ${GOOGLE_FACTCHECK_API_KEY:-}
+  NEWSAPI_KEY: ${NEWSAPI_KEY:-}
+  STORE_STATEMENTS: ${STORE_STATEMENTS:-0}
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      REDIS_URL: redis://redis:6379
+      LLM_SERVER_URL: http://llm:8001
+    volumes:
+      - ./models:/app/models:ro
+      - ./data:/app/data:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+
+  llm:
+    build:
+      context: .
+      dockerfile: Dockerfile.llm
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      <<: *common-env
+      HF_HOME: /app/hf_cache
+    volumes:
+      - ./models:/app/models
+      - hf_cache:/app/hf_cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 60s
+      timeout: 15s
+      start_period: 180s
+      retries: 3
+
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_URL: http://api:8000
+      API_KEY: ${API_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  redis_data:
+  hf_cache:
