@@ -210,6 +210,10 @@ class CredibilityDataset(Dataset):
         if hasattr(token_type_ids, "squeeze"):
             token_type_ids = token_type_ids.squeeze(0)
 
+        # Per-sample loss weight (inverse-frequency class weight). Absent on
+        # val/test datasets → defaults to 1.0 (unweighted evaluation).
+        weight = float(row.get("_sample_weight", 1.0))
+
         return {
             "input_ids":      enc["input_ids"].squeeze(0),
             "attention_mask": enc["attention_mask"].squeeze(0),
@@ -217,6 +221,7 @@ class CredibilityDataset(Dataset):
             "features":       features,
             "label":          torch.tensor(float(row["credibility_score"]),
                                            dtype=torch.float),
+            "weight":         torch.tensor(weight, dtype=torch.float),
         }
 
 
@@ -255,9 +260,10 @@ class DeBERTaCredibilityModel(nn.Module):
     def __init__(self, model_name: str = DEFAULT_MODEL,
                  n_features: int = len(FEAT_COLS), dropout: float = DROPOUT):
         super().__init__()
-        self.config  = AutoConfig.from_pretrained(model_name)
-        self.encoder = AutoModel.from_pretrained(model_name, config=self.config)
-        hidden       = self.config.hidden_size   # 768 for base models
+        self.config     = AutoConfig.from_pretrained(model_name)
+        self.encoder    = AutoModel.from_pretrained(model_name, config=self.config)
+        self.n_features = n_features
+        hidden          = self.config.hidden_size   # 768 for base models
 
         # Fusion head: [CLS] (768) + engineered features (13) → score (1)
         self.head = nn.Sequential(
@@ -280,19 +286,47 @@ class DeBERTaCredibilityModel(nn.Module):
         # MPS: DeBERTa relative attention can produce NaN via -inf softmax
         cls_emb = torch.nan_to_num(cls_emb, nan=0.0, posinf=1.0, neginf=-1.0)
 
-        if features is not None:
-            combined = torch.cat([cls_emb, features], dim=1)  # (B, 781)
-        else:
-            combined = cls_emb
+        # The fusion head always expects hidden + n_features dims. When a caller
+        # omits engineered features, substitute a zero vector so the shapes match
+        # (prevents a 768-vs-781 RuntimeError in single-statement inference).
+        if features is None:
+            features = torch.zeros(cls_emb.shape[0], self.n_features,
+                                   device=cls_emb.device, dtype=cls_emb.dtype)
+        combined = torch.cat([cls_emb, features], dim=1)  # (B, hidden + n_features)
 
         return self.head(combined).squeeze(-1)  # (B,)
 
 
 def combined_loss(preds: torch.Tensor, targets: torch.Tensor,
+                  weights: torch.Tensor = None,
                   alpha: float = ALPHA_LOSS) -> torch.Tensor:
-    """alpha × MSE + (1-alpha) × MAE. alpha=0.7 weights MSE more heavily."""
-    return alpha * nn.MSELoss()(preds, targets) + \
-           (1 - alpha) * nn.L1Loss()(preds, targets)
+    """
+    alpha × MSE + (1-alpha) × MAE. alpha=0.7 weights MSE more heavily.
+
+    Optional per-sample `weights` (inverse-frequency class weights) counteract
+    label imbalance: the medium-credibility bucket dominates the merged corpus,
+    so up-weighting the sparse low/high buckets lowers MAE on the tails without
+    hurting the majority. When weights is None this is exactly MSE/MAE as before.
+    """
+    se = (preds - targets) ** 2      # squared error per sample
+    ae = (preds - targets).abs()     # absolute error per sample
+    if weights is not None:
+        se = se * weights
+        ae = ae * weights
+    return alpha * se.mean() + (1 - alpha) * ae.mean()
+
+
+def compute_class_weights(scores: np.ndarray, cap: float = 3.0) -> np.ndarray:
+    """
+    Inverse-frequency weights over the 3 credibility buckets (low/mid/high),
+    normalised to mean ≈ 1 and capped at `cap`× so no bucket dominates.
+    Returns a per-row weight array aligned with `scores`.
+    """
+    buckets = np.where(scores < 0.35, 0, np.where(scores < 0.65, 1, 2))
+    counts  = np.bincount(buckets, minlength=3).astype(float)
+    inv     = counts.sum() / (3.0 * np.maximum(counts, 1.0))
+    inv     = np.minimum(inv, cap)
+    return inv[buckets]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,11 +341,12 @@ def freeze_layers(model: DeBERTaCredibilityModel, n: int = FREEZE_N) -> None:
     DeBERTa was pre-trained on large text corpora — the bottom layers capture
     universal linguistic patterns (syntax, morphology) that transfer perfectly.
     Fine-tuning them risks catastrophic forgetting on small datasets (~23k rows).
-    Layers 6–11 + the regression head remain trainable — they adapt to the
+    Layers N–11 + the regression head remain trainable — they adapt to the
     credibility scoring task while preserving lower-level representations.
 
     DeBERTa-v3-base: 12 transformer layers (0–11).
-    Freezing bottom 6 → layers 6–11 + head are trainable.
+    With FREEZE_N=4 → layers 4–11 + head are trainable (more capacity to fit
+    the task than freezing 6, which helped lower val MAE in tuning).
     """
     for p in model.encoder.embeddings.parameters():
         p.requires_grad = False
@@ -340,10 +375,11 @@ def train_epoch(model, loader, optimizer, scheduler, device) -> float:
         ttype = batch["token_type_ids"].to(device)
         feats = batch["features"].to(device)
         lbls  = batch["label"].to(device)
+        wts   = batch["weight"].to(device)
 
         optimizer.zero_grad()
         preds = model(ids, mask, ttype, feats)
-        loss  = combined_loss(preds, lbls)
+        loss  = combined_loss(preds, lbls, weights=wts)
         if torch.isnan(loss) or torch.isinf(loss):
             pbar.set_postfix(loss="NaN-skip")
             continue
@@ -360,7 +396,7 @@ def train_epoch(model, loader, optimizer, scheduler, device) -> float:
 
 
 @torch.no_grad()
-def evaluate_model(model, loader, device) -> dict:
+def evaluate_model(model, loader, device, return_preds: bool = False) -> dict:
     model.eval()
     preds_all, lbls_all = [], []
     total_loss = 0.0
@@ -372,19 +408,52 @@ def evaluate_model(model, loader, device) -> dict:
         lbls  = batch["label"].to(device)
         preds = model(ids, mask, ttype, feats)
         preds = torch.nan_to_num(preds, nan=0.5, posinf=1.0, neginf=0.0)
+        # Evaluation loss is unweighted — reports true error on the raw distribution.
         total_loss += combined_loss(preds, lbls).item()
         preds_all.extend(preds.cpu().numpy())
         lbls_all.extend(lbls.cpu().numpy())
 
     p = np.array(preds_all); y = np.array(lbls_all)
     def bucket(a): return np.where(a<0.35,0,np.where(a<0.65,1,2))
-    return {
+    metrics = {
         "loss":     round(total_loss / len(loader), 4),
         "MAE":      round(mean_absolute_error(y, p), 4),
         "Pearson_r": round(pearsonr(y, p)[0], 4),
         "Spearman_r":round(spearmanr(y, p)[0], 4),
         "Macro_F1": round(f1_score(bucket(y), bucket(p), average="macro"), 4),
     }
+    if return_preds:
+        return metrics, p
+    return metrics
+
+
+def evaluate_per_dataset(test_df: pd.DataFrame, preds: np.ndarray) -> dict:
+    """
+    Break down test MAE / F1 by source dataset (liar2, multifc, fever, averitec).
+    Exposes whether the model is carried by one easy corpus (e.g. FEVER) while
+    underperforming on the hard political-claim data (LIAR-2).
+    """
+    if "dataset" not in test_df.columns or len(preds) != len(test_df):
+        return {}
+    y = test_df["credibility_score"].values
+    def bucket(a): return np.where(a < 0.35, 0, np.where(a < 0.65, 1, 2))
+    out = {}
+    print("\n  Per-dataset test breakdown:")
+    print(f"  {'dataset':<12} {'n':>7} {'MAE':>8} {'F1':>8}")
+    print(f"  {'─'*12} {'─'*7} {'─'*8} {'─'*8}")
+    for ds in sorted(test_df["dataset"].unique()):
+        mask = (test_df["dataset"] == ds).values
+        if mask.sum() < 5:
+            continue
+        y_ds, p_ds = y[mask], preds[mask]
+        mae = float(mean_absolute_error(y_ds, p_ds))
+        try:
+            f1 = float(f1_score(bucket(y_ds), bucket(p_ds), average="macro"))
+        except ValueError:
+            f1 = float("nan")
+        out[ds] = {"n": int(mask.sum()), "MAE": round(mae, 4), "Macro_F1": round(f1, 4)}
+        print(f"  {ds:<12} {int(mask.sum()):>7,} {mae:>8.4f} {f1:>8.4f}")
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -532,6 +601,14 @@ def train(model_name: str = DEFAULT_MODEL,
     print(f"  Prefix: {'enabled' if use_prefix else 'disabled'}")
     print(f"{'='*60}\n")
 
+    # Checkpoint paths are model-specific so the RoBERTa ablation run does NOT
+    # overwrite the production DeBERTa weights (both used to save to deberta_best.pt).
+    tag         = "deberta" if model_name == DEFAULT_MODEL \
+                  else model_name.split("/")[-1].replace("-", "_")
+    ckpt_path   = MODEL_DIR / f"{tag}_best.pt"
+    tok_path    = MODEL_DIR / f"{tag}_tokenizer"
+    results_path = MODEL_DIR / f"{tag}_results.json"
+
     # Load data
     train_df = pd.read_csv(DATA_DIR / "train.csv")
     val_df   = pd.read_csv(DATA_DIR / "val.csv")
@@ -544,6 +621,15 @@ def train(model_name: str = DEFAULT_MODEL,
                 df[col] = 0.0
             else:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    # Inverse-frequency sample weights (train only) to counter label imbalance.
+    train_df["_sample_weight"] = compute_class_weights(
+        train_df["credibility_score"].values)
+    _wcounts = train_df.groupby(
+        np.where(train_df["credibility_score"] < 0.35, "low",
+                 np.where(train_df["credibility_score"] < 0.65, "mid", "high"))
+    )["_sample_weight"].first().round(3).to_dict()
+    print(f"  Class weights (low/mid/high): {_wcounts}")
 
     # Tokenizer
     print("Loading tokenizer…")
@@ -625,10 +711,8 @@ def train(model_name: str = DEFAULT_MODEL,
                 best_mae   = val_m["MAE"]
                 best_epoch = epoch
                 no_improve = 0
-                torch.save(model.state_dict(),
-                           MODEL_DIR / "deberta_best.pt")
-                tokenizer.save_pretrained(
-                    MODEL_DIR / "deberta_tokenizer")
+                torch.save(model.state_dict(), ckpt_path)
+                tokenizer.save_pretrained(tok_path)
                 print(f"  ★ New best — saved (val MAE={best_mae:.4f})")
             else:
                 no_improve += 1
@@ -639,12 +723,15 @@ def train(model_name: str = DEFAULT_MODEL,
         print(f"\n  Best epoch: {best_epoch}  |  Best val MAE: {best_mae:.4f}")
 
         # Load best weights, evaluate on test
-        model.load_state_dict(torch.load(
-            MODEL_DIR / "deberta_best.pt", map_location=device))
-        test_m = evaluate_model(model, test_loader, device)
+        model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        test_m, test_preds = evaluate_model(model, test_loader, device,
+                                            return_preds=True)
         print(f"  Test MAE={test_m['MAE']:.4f}  "
               f"Pearson_r={test_m['Pearson_r']:.4f}  "
               f"F1={test_m['Macro_F1']:.4f}")
+
+        # Per-dataset breakdown (R8 evaluation depth)
+        per_dataset = evaluate_per_dataset(test_df, test_preds)
 
         # Load baseline for delta comparison
         baseline_mae = None
@@ -673,15 +760,15 @@ def train(model_name: str = DEFAULT_MODEL,
         "best_epoch":    best_epoch,
         "best_val_MAE":  float(best_mae),
         "test":          test_m,
+        "per_dataset":   per_dataset,
         "baseline_MAE":  baseline_mae,
         "improvement":   round(float((baseline_mae or 0) - best_mae), 4),
         "history":       history,
     })
-    (MODEL_DIR / "deberta_results.json").write_text(
-        json.dumps(results, indent=2))
-    print(f"\n  Saved: models/deberta_best.pt")
-    print(f"  Saved: models/deberta_tokenizer/")
-    print(f"  Saved: models/deberta_results.json")
+    results_path.write_text(json.dumps(results, indent=2))
+    print(f"\n  Saved: models/{ckpt_path.name}")
+    print(f"  Saved: models/{tok_path.name}/")
+    print(f"  Saved: models/{results_path.name}")
 
     return results
 
@@ -738,14 +825,22 @@ def predict_single(statement: str, speaker: str = "",
     model.load_state_dict(torch.load(str(ckpt), map_location=device))
     model.eval()
 
-    # Context prior for the given context
-    from credibility_detector_phases123 import get_context_prior
-    prior = get_context_prior(context)
+    # Build the SAME engineered features the model trained on, so single-statement
+    # inference matches batch evaluation. (Previously features were omitted, which
+    # both crashed the fusion head and would have ignored the sentiment signals.)
+    from credibility_detector_phases123 import (
+        normalise_context, get_context_prior, extract_all_features)
+    ctx_slot = normalise_context(context)
+    prior    = get_context_prior(ctx_slot)
+    feats_d  = extract_all_features(statement, ctx_slot)
+    feats_d["context_credibility_prior"] = prior
+    feats_d["token_length_approx"] = len(str(statement)) / 4.0
+    features = [float(feats_d.get(c, 0.0)) for c in FEAT_COLS]
 
     result = predict_with_uncertainty(
         model, tokenizer, statement,
-        speaker=speaker, context=context, prior=prior,
-        device=device,
+        speaker=speaker, context=ctx_slot, prior=prior,
+        features=features, device=device,
     )
 
     print(f"\n  Statement  : {statement}")
@@ -800,14 +895,18 @@ def main():
         model.eval()
         test_df = pd.read_csv(DATA_DIR/"test.csv")
         for col in FEAT_COLS:
-            if col not in test_df.columns: test_df[col] = 0.0
+            if col not in test_df.columns:
+                test_df[col] = 0.0
+            else:
+                test_df[col] = pd.to_numeric(test_df[col], errors="coerce").fillna(0.0)
         test_ds = CredibilityDataset(test_df, tokenizer)
         test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE,
                                   shuffle=False, num_workers=0)
-        m = evaluate_model(model, test_loader, device)
+        m, preds = evaluate_model(model, test_loader, device, return_preds=True)
         print("\n  Test metrics:")
         for k, v in m.items():
             print(f"    {k}: {v}")
+        evaluate_per_dataset(test_df, preds)
     elif args.predict:
         predict_single(args.predict, args.speaker,
                        args.context, args.device)

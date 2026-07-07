@@ -17,6 +17,9 @@ peft>=0.8.0                  # LoRA adapter
 trl>=0.7.0                   # SFTTrainer + DataCollatorForCompletionOnlyLM
 bitsandbytes>=0.41.0         # 4-bit NF4 quantisation (CUDA only)
 
+# ── Explainability (Phase 5 token-level SHAP) ──────────────────────────────
+transformers-interpret>=0.10.0   # get_shap_highlights() in phase5_deberta.py
+
 # ── Evaluation ─────────────────────────────────────────────────────────────
 evaluate>=0.4.0              # ROUGE-L, BERTScore
 rouge-score>=0.1.2
