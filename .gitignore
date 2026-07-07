@@ -1,0 +1,40 @@
+# ── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.so
+
+# ── Environment ────────────────────────────────────────────────────────────
+.env
+.venv/
+venv/
+env/
+
+# ── Large data & model files (too big for GitHub) ──────────────────────────
+data/train.csv
+data/val.csv
+data/test.csv
+models/*.pt
+models/*.pkl
+models/deberta_tokenizer/
+
+# ── Generated / experiment artifacts ───────────────────────────────────────
+mlflow.db
+mlruns/
+eda_output/
+
+# ── IDE ────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+
+# ── OS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Notebooks checkpoints ──────────────────────────────────────────────────
+.ipynb_checkpoints/

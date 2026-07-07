@@ -1,0 +1,33 @@
+{
+  "model": "TF-IDF + Ridge (with engineered features)",
+  "alpha": 1.0,
+  "n_features": 50013,
+  "train": {
+    "split": "train",
+    "MAE": 0.2248,
+    "RMSE": 0.2741,
+    "Pearson_r": 0.7297,
+    "Spearman_r": 0.735,
+    "Macro_F1_3class": 0.6305,
+    "n": 71376
+  },
+  "val": {
+    "split": "val",
+    "MAE": 0.2867,
+    "RMSE": 0.3481,
+    "Pearson_r": 0.4598,
+    "Spearman_r": 0.4483,
+    "Macro_F1_3class": 0.4884,
+    "n": 8921
+  },
+  "test": {
+    "split": "test",
+    "MAE": 0.2877,
+    "RMSE": 0.3478,
+    "Pearson_r": 0.4636,
+    "Spearman_r": 0.4454,
+    "Macro_F1_3class": 0.4933,
+    "n": 8919
+  },
+  "benchmark_mae": 0.2867
+}
