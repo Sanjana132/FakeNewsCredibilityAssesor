@@ -172,57 +172,28 @@ FEAT_COLS = [
     "persuasive_context_flag", "context_credibility_prior", "token_length_approx",
 ]
 
-PERSUASIVE_CONTEXTS = {
-    "a campaign rally", "a WhatsApp forward", "a social media post",
-    "a Twitter post", "a Facebook post", "an ad", "online media",
-}
-
-
 def _compute_features(text: str, context: str,
                       context_prior: float = 0.5) -> list[float]:
     """
     Compute the 13 engineered features for a single claim at inference time.
-    Mirrors the Phase 2 feature engineering.
+
+    Delegates to the canonical Phase 2 extract_all_features() so the numbers
+    match training EXACTLY. A previous local reimplementation drifted — it used
+    fractional opinion-word counts, an unbounded pos/neg ratio, and abs(compound)
+    for extremity — none of which matched the values the TF-IDF scaler and the
+    DeBERTa fusion head were fitted on, quietly degrading every prediction.
     """
     try:
-        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-        vader = SentimentIntensityAnalyzer()
-        vs = vader.polarity_scores(text)
-        compound = vs["compound"]
-        pos = vs["pos"]
-        neg = vs["neg"]
-        neu = vs["neu"]
-    except ImportError:
-        compound = pos = neg = neu = 0.0
-
-    words      = text.lower().split()
-    n_words    = max(len(words), 1)
-    pos_count  = sum(1 for w in words if w in _POS_WORDS) / n_words
-    neg_count  = sum(1 for w in words if w in _NEG_WORDS) / n_words
-    ratio      = pos_count / (neg_count + 1e-6)
-    extremity  = abs(compound)
-    persuasive = 1.0 if context in PERSUASIVE_CONTEXTS else 0.0
-    risk       = context_prior * extremity
-    adj_sent   = compound * context_prior
-    tok_len    = len(words)
-
-    return [compound, pos, neg, neu,
-            pos_count, neg_count, ratio, extremity,
-            risk, adj_sent, persuasive,
-            context_prior, float(tok_len)]
-
-
-def _load_opinion_words():
-    try:
-        from nltk.corpus import opinion_lexicon
-        import nltk
-        nltk.download("opinion_lexicon", quiet=True)
-        return set(opinion_lexicon.positive()), set(opinion_lexicon.negative())
+        from credibility_detector_phases123 import (
+            extract_all_features, normalise_context)
+        ctx   = normalise_context(context)
+        feats = extract_all_features(text, ctx)          # 11 sentiment/interaction feats
+        feats["context_credibility_prior"] = float(context_prior)
+        feats["token_length_approx"]       = len(str(text)) / 4.0
+        return [float(feats.get(c, 0.0)) for c in FEAT_COLS]
     except Exception:
-        return set(), set()
-
-
-_POS_WORDS, _NEG_WORDS = _load_opinion_words()
+        # Keep the vector shape correct even if imports/NLTK data are missing.
+        return [0.0] * len(FEAT_COLS)
 
 
 def predict_tfidf(text: str, features: list[float]) -> Optional[float]:

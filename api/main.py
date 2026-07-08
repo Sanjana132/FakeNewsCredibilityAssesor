@@ -250,6 +250,10 @@ async def _full_assessment(req: PredictRequest,
     context = normalise_context(req.context)
     prior   = float(get_context_prior(context))
     feats_d = extract_all_features(req.statement, context)
+    # extract_all_features returns 11 features; supply the remaining two so the
+    # 13-vector matches training (otherwise prior + length silently default to 0).
+    feats_d["context_credibility_prior"] = prior
+    feats_d["token_length_approx"]       = len(str(req.statement)) / 4.0
     from phase5_deberta import FEAT_COLS
     feats = [feats_d.get(c, 0.0) for c in FEAT_COLS]
 
