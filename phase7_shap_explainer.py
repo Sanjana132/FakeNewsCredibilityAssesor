@@ -141,11 +141,15 @@ def _predict_texts(texts):
 def token_shap_masking(text: str, n_samples: int = 64) -> dict:
     """
     Lightweight token attribution via random masking (approximates SHAP).
-    For each token, estimate E[f(x) | token masked] - f(x).
-    A positive value means the token RAISES credibility; negative means it LOWERS it.
 
-    Returns:
-        {token: shap_value, ...} sorted by absolute value descending.
+    For each token we estimate its marginal effect as
+        attr = E[score | token present] − E[score | token masked]
+    over `n_samples` random present/absent subsets. A positive value means the
+    token RAISES credibility; negative means it LOWERS it. Attributions are
+    centred on 0 (a token with no effect scores ~0), which is what the HTML
+    colouring and the global bar chart expect.
+
+    Returns {tokens, attrs, baseline}.
     """
     tokens = text.split()
     if not tokens:
@@ -153,19 +157,29 @@ def token_shap_masking(text: str, n_samples: int = 64) -> dict:
 
     baseline_score = float(_predict_texts([text])[0])
     n = len(tokens)
-    attr = np.zeros(n)
-
     rng = np.random.default_rng(42)
-    for _ in range(n_samples):
-        mask = rng.integers(0, 2, size=n).astype(bool)
-        masked_text = " ".join(t if mask[i] else "[MASK]"
-                               for i, t in enumerate(tokens))
-        masked_score = float(_predict_texts([masked_text])[0])
-        # Shapley-style: tokens present in mask get credit for difference
-        delta = masked_score - (baseline_score - masked_score)
-        attr[mask] += delta
 
-    attr /= n_samples
+    # Sample all present/absent subsets up front and score them in one batched
+    # pass — both faster and lets us average present-vs-absent cleanly.
+    masks = rng.integers(0, 2, size=(n_samples, n)).astype(bool)
+    masked_texts = [
+        " ".join(tok if row[i] else "[MASK]" for i, tok in enumerate(tokens))
+        for row in masks
+    ]
+    scores = _predict_texts(masked_texts)
+
+    sum_present = np.zeros(n); cnt_present = np.zeros(n)
+    sum_absent  = np.zeros(n); cnt_absent  = np.zeros(n)
+    for row, s in zip(masks, scores):
+        sum_present[row]  += s; cnt_present[row]  += 1
+        sum_absent[~row]  += s; cnt_absent[~row]  += 1
+
+    mean_present = np.where(cnt_present > 0,
+                            sum_present / np.maximum(cnt_present, 1), baseline_score)
+    mean_absent  = np.where(cnt_absent > 0,
+                            sum_absent / np.maximum(cnt_absent, 1),  baseline_score)
+    attr = mean_present - mean_absent
+
     return {
         "tokens":    tokens,
         "attrs":     attr.tolist(),
