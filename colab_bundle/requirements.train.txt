@@ -1,0 +1,33 @@
+# ── Fake News & Source Credibility Detector — Training Requirements ────────
+# Install: pip install -r requirements.train.txt
+# Used by: Dockerfile.llm, Google Colab, local GPU training
+# Includes everything in requirements.api.txt plus training-only deps.
+
+-r requirements.api.txt
+
+# ── Training ───────────────────────────────────────────────────────────────
+datasets>=2.14.0             # HuggingFace dataset loading
+accelerate>=0.26.0           # multi-GPU + mixed precision training
+
+# ── DeBERTa fine-tuning (Phase 5) ─────────────────────────────────────────
+mlflow>=2.10.0               # experiment tracking
+
+# ── Mistral QLoRA (Phase 7, CUDA only) ────────────────────────────────────
+peft>=0.8.0                  # LoRA adapter
+trl>=0.7.0                   # SFTTrainer + DataCollatorForCompletionOnlyLM
+bitsandbytes>=0.41.0         # 4-bit NF4 quantisation (CUDA only)
+
+# ── Explainability (Phase 5 token-level SHAP) ──────────────────────────────
+transformers-interpret>=0.10.0   # get_shap_highlights() in phase5_deberta.py
+
+# ── Evaluation ─────────────────────────────────────────────────────────────
+evaluate>=0.4.0              # ROUGE-L, BERTScore
+rouge-score>=0.1.2
+bert-score>=0.3.13
+
+# ── Calibration (Phase 5b) ─────────────────────────────────────────────────
+# scipy already in api deps
+
+# ── Visualisation ──────────────────────────────────────────────────────────
+matplotlib>=3.7.0
+seaborn>=0.13.0
