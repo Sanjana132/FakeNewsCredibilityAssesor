@@ -236,26 +236,25 @@ class DeBERTaCredibilityModel(nn.Module):
     Architecture:
         Input: [PREFIX + STATEMENT TEXT]
             ↓
-        DeBERTa encoder
+        DeBERTa encoder → masked mean-pooled token states (hidden-dim)
+            ↓  LayerNorm
+        Concat with STANDARDISED engineered features (n-dim)
             ↓
-        [CLS] hidden state (768-dim)
-            ↓
-        Concat with engineered features (13-dim) → 781-dim
-            ↓
-        Linear(781 → 256) → GELU → Dropout
-            ↓
-        Linear(256 → 1) → Sigmoid → credibility score (0–1)
+        Linear → LayerNorm → GELU → Dropout → Linear → GELU → Dropout → Linear
+            ↓  sigmoid → credibility score (0–1)
 
-    Design decisions:
-    • [CLS] token — represents the whole sequence. Standard for classification/regression.
-    • Concatenate engineered features AFTER the encoder, not before.
-      Before: they'd be lost during attention — the encoder ignores arbitrary vectors.
-      After: the regression head can learn how much weight to give text vs features.
-    • GELU activation — outperforms ReLU in transformer fine-tuning tasks.
-    • Sigmoid output — constrains score to (0,1) matching our target range.
-      Without sigmoid, model can predict negative values or >1.
-    • Combined MSE + MAE loss — MSE penalises large errors heavily,
-      MAE is robust to outliers. Weighted combination (0.7 MSE + 0.3 MAE) balances both.
+    Design decisions (and why the earlier version got stuck at the mean):
+    • Features are STANDARDISED (per-feature mean/std from TRAIN) before fusion.
+      Previously raw features (token_length ~30-128, word counts 0-20) were
+      ~100× the scale of the unit-scale embedding dims, so the head could only
+      fit the features' mean and ignored the text → constant ~0.5 output.
+    • Masked MEAN-pooling over tokens instead of the bare [CLS] state — more
+      stable for regression and less sensitive to DeBERTa's attention quirks.
+    • LayerNorm on the pooled embedding and inside the head keeps activations
+      well-scaled; the final layer outputs a raw logit (sigmoid in forward()),
+      and its bias is initialised to logit(train mean) so training starts at the
+      data mean rather than an arbitrary constant.
+    • Combined MSE + MAE loss (0.7/0.3) with inverse-frequency sample weights.
     """
     def __init__(self, model_name: str = DEFAULT_MODEL,
                  n_features: int = len(FEAT_COLS), dropout: float = DROPOUT):
@@ -265,15 +264,41 @@ class DeBERTaCredibilityModel(nn.Module):
         self.n_features = n_features
         hidden          = self.config.hidden_size   # 768 for base models
 
-        # Fusion head: [CLS] (768) + engineered features (13) → score (1)
+        # Per-feature standardisation stats (filled from TRAIN via
+        # set_feature_stats). Buffers → saved in the checkpoint and applied
+        # identically at inference.
+        self.register_buffer("feat_mean", torch.zeros(n_features))
+        self.register_buffer("feat_std",  torch.ones(n_features))
+
+        # Normalise pooled text embedding to a comparable scale to features.
+        self.pool_norm = nn.LayerNorm(hidden)
+
+        # Fusion head → raw logit (sigmoid applied in forward()).
         self.head = nn.Sequential(
             nn.Dropout(dropout),
             nn.Linear(hidden + n_features, 256),
+            nn.LayerNorm(256),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, 64),
             nn.GELU(),
             nn.Dropout(dropout / 2),
-            nn.Linear(256, 1),
-            nn.Sigmoid(),
+            nn.Linear(64, 1),
         )
+
+    def set_feature_stats(self, mean, std) -> None:
+        """Install TRAIN-set per-feature mean/std used to standardise features."""
+        m = torch.as_tensor(np.asarray(mean), dtype=torch.float)
+        s = torch.as_tensor(np.asarray(std),  dtype=torch.float).clamp_min(1e-6)
+        self.feat_mean.copy_(m.to(self.feat_mean.device))
+        self.feat_std.copy_(s.to(self.feat_std.device))
+
+    def init_output_bias(self, mean_label: float) -> None:
+        """Start predictions at the dataset mean (escapes the constant-0.5 trap)."""
+        import math
+        p = min(max(float(mean_label), 1e-3), 1 - 1e-3)
+        with torch.no_grad():
+            self.head[-1].bias.fill_(math.log(p / (1 - p)))
 
     def forward(self, input_ids, attention_mask, token_type_ids=None,
                 features=None):
@@ -282,19 +307,23 @@ class DeBERTaCredibilityModel(nn.Module):
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
         )
-        cls_emb = out.last_hidden_state[:, 0, :]  # [CLS] token, shape (B, 768)
-        # MPS: DeBERTa relative attention can produce NaN via -inf softmax
-        cls_emb = torch.nan_to_num(cls_emb, nan=0.0, posinf=1.0, neginf=-1.0)
+        # Masked mean-pooling over tokens (B, L, H) → (B, H).
+        hs   = out.last_hidden_state
+        mask = attention_mask.unsqueeze(-1).to(hs.dtype)
+        pooled = (hs * mask).sum(1) / mask.sum(1).clamp_min(1.0)
+        # Safety net: DeBERTa relative attention can emit NaN on Apple MPS.
+        pooled = torch.nan_to_num(pooled, nan=0.0, posinf=1.0, neginf=-1.0)
+        pooled = self.pool_norm(pooled)
 
-        # The fusion head always expects hidden + n_features dims. When a caller
-        # omits engineered features, substitute a zero vector so the shapes match
-        # (prevents a 768-vs-781 RuntimeError in single-statement inference).
+        # Standardise features (zeros if a caller omits them, e.g. SHAP wrapper).
         if features is None:
-            features = torch.zeros(cls_emb.shape[0], self.n_features,
-                                   device=cls_emb.device, dtype=cls_emb.dtype)
-        combined = torch.cat([cls_emb, features], dim=1)  # (B, hidden + n_features)
+            features = torch.zeros(pooled.shape[0], self.n_features,
+                                   device=pooled.device, dtype=pooled.dtype)
+        feats = (features - self.feat_mean) / self.feat_std
 
-        return self.head(combined).squeeze(-1)  # (B,)
+        combined = torch.cat([pooled, feats], dim=1)
+        logit    = self.head(combined).squeeze(-1)
+        return torch.sigmoid(logit)
 
 
 def combined_loss(preds: torch.Tensor, targets: torch.Tensor,
@@ -556,14 +585,12 @@ def get_shap_highlights(model, tokenizer, statement: str,
                 super().__init__()
                 self.m = m
             def forward(self, input_ids, attention_mask):
-                # No features in SHAP wrapper (attribution on text only)
-                out = self.m.encoder(input_ids=input_ids,
-                                     attention_mask=attention_mask)
-                cls = out.last_hidden_state[:, 0, :]
-                # Use only first 768 dims (no engineered features for SHAP)
-                dummy = torch.zeros(cls.shape[0], len(FEAT_COLS)).to(cls.device)
-                score = self.m.head(torch.cat([cls, dummy], dim=1))
-                false_l = 1.0 - score; true_l = score
+                # Full model forward (features default to zeros) → prob in [0,1].
+                # Kept consistent with the pooled + standardised-feature head.
+                score = self.m(input_ids=input_ids,
+                               attention_mask=attention_mask).unsqueeze(-1)
+                false_l = 1.0 - score
+                true_l  = score
                 mixed_l = 1.0 - torch.abs(score - 0.5) * 2
                 return torch.cat([false_l, mixed_l, true_l], dim=1)
 
@@ -652,12 +679,25 @@ def train(model_name: str = DEFAULT_MODEL,
     model = DeBERTaCredibilityModel(model_name=model_name).to(device)
     freeze_layers(model, FREEZE_N)
 
-    # Optimiser — separate LRs for encoder vs head
-    # Lower LR for encoder: preserve pre-trained representations
-    # Head LR capped at 5× encoder LR (was 10×) to reduce early instability
+    # Standardise features + init output bias from TRAIN stats. This is the fix
+    # for the "val MAE frozen / predicts a constant" symptom: without it the raw
+    # large-magnitude features swamp the text embedding and the head learns only
+    # the mean.
+    feat_mean = train_df[FEAT_COLS].astype(float).mean().values
+    feat_std  = train_df[FEAT_COLS].astype(float).std().values
+    model.set_feature_stats(feat_mean, feat_std)
+    model.init_output_bias(float(train_df["credibility_score"].mean()))
+
+    # Optimiser — separate LRs for encoder vs head. The "head" group is every
+    # trainable parameter outside the encoder (fusion head + pool_norm), so the
+    # new LayerNorms are actually optimised (a plain model.head.parameters()
+    # would have silently skipped pool_norm).
+    encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
+    head_params    = [p for n, p in model.named_parameters()
+                      if p.requires_grad and not n.startswith("encoder.")]
     optimizer = torch.optim.AdamW([
-        {"params": model.encoder.parameters(), "lr": LR},
-        {"params": model.head.parameters(),    "lr": LR * 5},
+        {"params": encoder_params, "lr": LR},
+        {"params": head_params,    "lr": LR * 5},
     ], weight_decay=0.01)
 
     total_steps  = len(train_loader) * EPOCHS
@@ -676,6 +716,24 @@ def train(model_name: str = DEFAULT_MODEL,
     best_mae   = float("inf")
     best_epoch = 0
     history    = []
+
+    # Fail-loud probe: DeBERTa-v3's disentangled attention emits NaN under Apple
+    # MPS. When that happens the encoder output is masked to zeros, the model can
+    # only predict a constant, and val MAE/F1 stay frozen every epoch. Warn early
+    # so the user switches to CUDA (Colab) or CPU instead of waiting hours.
+    model.eval()
+    with torch.no_grad():
+        _b = next(iter(train_loader))
+        _p = model(_b["input_ids"].to(device), _b["attention_mask"].to(device),
+                   _b["token_type_ids"].to(device), _b["features"].to(device))
+    if torch.isnan(_p).any() or torch.isinf(_p).any():
+        print(f"\n  ⚠  Encoder produced NaN/Inf on device '{device}'. This is the "
+              "known DeBERTa-v3 MPS bug — the model CANNOT learn here and val MAE "
+              "will stay frozen. Re-run with --device cuda (Colab) or --device cpu.\n")
+    else:
+        print(f"  ✓ Forward-pass sanity check OK on '{device}' "
+              f"(sample preds span {_p.min().item():.3f}–{_p.max().item():.3f}).")
+    model.train()
 
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params({
