@@ -286,6 +286,13 @@ class DeBERTaCredibilityModel(nn.Module):
             nn.Linear(64, 1),
         )
 
+        # Force the whole model to fp32. deberta-v3-base ships FP16 weights and
+        # recent transformers keep that native dtype — which both breaks the
+        # fp32 LayerNorms here ("expected Half but found Float") and makes the
+        # disentangled-attention softmax prone to NaN. fp32 is stable and cheap
+        # for a base-size model.
+        self.float()
+
     def set_feature_stats(self, mean, std) -> None:
         """Install TRAIN-set per-feature mean/std used to standardise features."""
         m = torch.as_tensor(np.asarray(mean), dtype=torch.float)
@@ -313,13 +320,17 @@ class DeBERTaCredibilityModel(nn.Module):
         pooled = (hs * mask).sum(1) / mask.sum(1).clamp_min(1.0)
         # Safety net: DeBERTa relative attention can emit NaN on Apple MPS.
         pooled = torch.nan_to_num(pooled, nan=0.0, posinf=1.0, neginf=-1.0)
-        pooled = self.pool_norm(pooled)
+
+        # Run the fusion head in its own dtype (fp32) regardless of the encoder's
+        # dtype — guards against a Half/Float mismatch if the encoder is fp16.
+        head_dtype = self.pool_norm.weight.dtype
+        pooled = self.pool_norm(pooled.to(head_dtype))
 
         # Standardise features (zeros if a caller omits them, e.g. SHAP wrapper).
         if features is None:
             features = torch.zeros(pooled.shape[0], self.n_features,
-                                   device=pooled.device, dtype=pooled.dtype)
-        feats = (features - self.feat_mean) / self.feat_std
+                                   device=pooled.device, dtype=head_dtype)
+        feats = (features.to(head_dtype) - self.feat_mean) / self.feat_std
 
         combined = torch.cat([pooled, feats], dim=1)
         logit    = self.head(combined).squeeze(-1)
