@@ -87,7 +87,7 @@ def _score_standalone(statement: str, speaker: str, context: str) -> dict:
                 "explanation": "DeBERTa weights not found.", "sources": [],
                 "model_used": "prior-only"}
 
-    device    = p5.detect_device()
+    device    = p5.detect_device(os.environ.get("MODEL_DEVICE"))
     tokenizer = AutoTokenizer.from_pretrained(str(tok_path), use_fast=False)
     model     = p5.DeBERTaCredibilityModel()
     ckpt      = torch.load(wt_path, map_location=device, weights_only=False)
