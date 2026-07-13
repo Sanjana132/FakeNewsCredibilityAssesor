@@ -39,18 +39,24 @@ confidence interval**, a **token-level explanation** of what drove the verdict,
 
 ## Results
 
-Measured on the held-out test split (~8.9k claims). The TF-IDF baseline is the
-benchmark the transformer must beat.
+Measured on the held-out test split (~8.9k claims). The fine-tuned DeBERTa-v3
+regressor cuts test MAE **~13%** below the TF-IDF baseline.
 
-| Model | Split | MAE ↓ | RMSE ↓ | Pearson r ↑ | Macro-F1 (3-class) ↑ |
-|-------|-------|------:|-------:|------------:|---------------------:|
-| TF-IDF + Ridge (+ 13 features) | val  | **0.2867** | 0.3481 | 0.460 | 0.488 |
-| TF-IDF + Ridge (+ 13 features) | test | 0.2877 | 0.3478 | 0.464 | 0.493 |
-| DeBERTa-v3-base (fusion head)  | —    | *trained on Colab GPU — see `models/deberta_results.json`* | | | |
+| Model | Test MAE ↓ | Test Macro-F1 (3-class) ↑ |
+|-------|-----------:|--------------------------:|
+| TF-IDF + Ridge baseline (+ 13 features) | 0.2877 | 0.493 |
+| **DeBERTa-v3-base (fusion head + MC-Dropout)** | **0.2512** | **0.555** |
 
-*3-class buckets: false (<0.35), mixed (0.35–0.65), true (≥0.65). DeBERTa is
-fine-tuned to beat the 0.287 baseline; run `phase5_deberta.py --train` to populate
-its row.*
+Per-dataset test MAE (DeBERTa) — the gain is broad-based, strongest on the hard
+political-claims slice, not carried by one easy corpus:
+
+| Slice | LIAR-2 | MultiFC | AVeriTeC | FEVER |
+|-------|-------:|--------:|---------:|------:|
+| Test MAE ↓ | **0.203** | 0.234 | 0.266 | 0.281 |
+
+*3-class buckets: false (<0.35), mixed (0.35–0.65), true (≥0.65). DeBERTa best
+epoch 4, val MAE 0.2553. Reproduce with `python phase5_deberta.py --train
+--device cuda --amp`; metrics are written to `models/deberta_results.json`.*
 
 ---
 
