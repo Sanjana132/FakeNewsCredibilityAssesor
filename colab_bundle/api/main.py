@@ -121,7 +121,10 @@ class ModelStore:
         if not tok_path.exists() or not wt_path.exists():
             logger.warning('"DeBERTa weights not found — score will use prior"')
             return
-        self.device = self._p5.detect_device()
+        # MODEL_DEVICE env var forces the serving device (e.g. "cpu" on Apple
+        # machines, where DeBERTa's attention is unreliable on MPS). Falls back to
+        # auto-detect (cuda → mps → cpu) when unset.
+        self.device = self._p5.detect_device(os.environ.get("MODEL_DEVICE"))
         self.tokenizer = AutoTokenizer.from_pretrained(str(tok_path), use_fast=False)
         self.model = self._p5.DeBERTaCredibilityModel()
         ckpt = torch.load(wt_path, map_location=self.device, weights_only=False)
@@ -303,6 +306,13 @@ async def _full_assessment(req: PredictRequest,
                   else "DeBERTa+TF-IDF" if tfidf_score is not None
                   else "DeBERTa")
 
+    # Re-centre the MC-Dropout interval on the (possibly ensembled) final score
+    # so the reported score always sits inside its own CI — otherwise the ensemble
+    # can pull the point estimate outside the DeBERTa-only interval.
+    ci_half  = (deberta_result["upper"] - deberta_result["lower"]) / 2.0
+    lower_ci = round(max(0.0, final_score - ci_half), 4)
+    upper_ci = round(min(1.0, final_score + ci_half), 4)
+
     elapsed = round((time.perf_counter() - t0) * 1000, 1)
     logger.info(
         f'"request_id":"{request_id}","score":{final_score},'
@@ -314,8 +324,8 @@ async def _full_assessment(req: PredictRequest,
         speaker=req.speaker,
         context=context,
         score=final_score,
-        lower_90ci=round(deberta_result["lower"], 4),
-        upper_90ci=round(deberta_result["upper"], 4),
+        lower_90ci=lower_ci,
+        upper_90ci=upper_ci,
         verdict=_score_to_verdict(final_score),
         model_used=model_used,
         deberta_score=round(d_score, 4),
