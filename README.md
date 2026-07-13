@@ -58,6 +58,20 @@ political-claims slice, not carried by one easy corpus:
 epoch 4, val MAE 0.2553. Reproduce with `python phase5_deberta.py --train
 --device cuda --amp`; metrics are written to `models/deberta_results.json`.*
 
+### Calibration & uncertainty (measured, `models/calibration.json`)
+
+| Metric | Value | Target | Status |
+|--------|------:|-------:|:------:|
+| Expected Calibration Error (10-bin) | **0.042** | < 0.05 | ✅ pass |
+| ECE after temperature scaling (T=1.08) | 0.040 | < 0.05 | ✅ |
+| MC-Dropout 90% CI coverage | 0.196 | ≈ 0.90 | ❌ fail |
+
+The **point estimates are well-calibrated** (ECE 0.042 over 8,950 test claims).
+The **MC-Dropout confidence intervals are honestly reported as over-confident** —
+90% coverage is only 0.196, i.e. the intervals are far too narrow, a known
+limitation of MC-Dropout. Fixing coverage with conformal prediction (MAPIE) is on
+the roadmap; the point score and its calibration are the trustworthy signal today.
+
 ---
 
 ## Architecture
@@ -177,8 +191,9 @@ and a 200-row end-to-end pipeline smoke test. GitHub Actions runs them on every 
   test asserts they're identical whether or not val/test rows exist.
 - **Reproducibility** — `set_seed(42)` seeds Python/NumPy/PyTorch/langdetect at
   every entrypoint; dataset sampling is `shuffle(seed)`-then-select, never first-N.
-- **Honest uncertainty** — calibration numbers (ECE, CI coverage) are measured and
-  saved to `models/calibration.json`; nothing is claimed without them.
+- **Honest uncertainty** — calibration is *measured* and reported both ways:
+  ECE 0.042 (point scores well-calibrated) **and** the failing MC-Dropout CI
+  coverage (0.196). Nothing is claimed without the numbers in `models/calibration.json`.
 - **Feature/serving parity** — the API computes inference features via the exact
   training function, so production scores match evaluation.
 
@@ -186,10 +201,13 @@ and a 200-row end-to-end pipeline smoke test. GitHub Actions runs them on every 
 
 - Labels come from fact-checkers and inherit their topical and temporal biases;
   the score reflects "how fact-checkers would rate this", not absolute ground truth.
+- **MC-Dropout intervals are over-confident** (90% CI coverage 0.196) — trust the
+  calibrated point score, not the interval width, until conformal calibration lands.
 - The Mistral justification layer and FAISS evidence index are optional and need a
   GPU / scraped index respectively.
-- **Roadmap (not implemented):** continuous learning from user feedback, drift
-  monitoring (Evidently), and a managed cloud deployment.
+- **Roadmap (not implemented):** conformal prediction intervals (MAPIE) to fix CI
+  coverage, continuous learning from user feedback, drift monitoring (Evidently),
+  and a managed cloud deployment.
 
 ---
 
