@@ -55,7 +55,7 @@ sys.path.insert(0, str(_HERE))
 from fastapi import (Depends, FastAPI, Header, HTTPException, Request,
                      Response, status)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -381,6 +381,27 @@ app.add_middleware(
 # ─────────────────────────────────────────────────────────────────────────────
 # ENDPOINTS
 # ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def root():
+    return """<!doctype html><html><head><meta charset="utf-8">
+    <title>Credibility Detector API</title>
+    <style>body{font-family:system-ui,Arial,sans-serif;max-width:640px;margin:60px auto;
+    padding:0 20px;line-height:1.6}code{background:#f2f2f2;padding:2px 6px;border-radius:4px}
+    a{color:#185FA5}</style></head><body>
+    <h1>🔍 Fake News &amp; Source Credibility Detector — API</h1>
+    <p>The service is running. Try the interactive docs:</p>
+    <ul>
+      <li><a href="/docs">/docs</a> — Swagger UI (test <code>POST /assess</code> here)</li>
+      <li><a href="/redoc">/redoc</a> — ReDoc reference</li>
+      <li><a href="/health">/health</a> — model status</li>
+      <li><a href="/speakers/top">/speakers/top</a> — most/least credible speakers</li>
+      <li><a href="/metrics">/metrics</a> — Prometheus metrics</li>
+    </ul>
+    <p style="color:#666;font-size:.9em">POST a claim to <code>/assess</code> with
+    JSON <code>{"statement": "...", "speaker": "...", "context": "..."}</code>.</p>
+    </body></html>"""
+
 
 @app.get("/health", response_model=HealthResponse, tags=["ops"])
 async def health():
