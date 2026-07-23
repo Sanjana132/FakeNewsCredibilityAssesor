@@ -30,6 +30,15 @@ DATA_DIR  = _HERE / "data"
 
 TIMEOUT_S = 10
 
+# Wikipedia (and good API etiquette generally) require a descriptive User-Agent;
+# requests without one get a 403. Sent on every outbound HTTP call.
+HTTP_HEADERS = {
+    "User-Agent": (
+        "FakeNewsCredibilityBot/1.0 "
+        "(academic research; contact sanj18reddy@gmail.com)"
+    )
+}
+
 
 @dataclass
 class SourceResult:
@@ -67,7 +76,7 @@ class GoogleFactCheckTool:
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(
-                        self._url, params=params,
+                        self._url, params=params, headers=HTTP_HEADERS,
                         timeout=aiohttp.ClientTimeout(total=TIMEOUT_S)) as r:
                     data = await r.json(content_type=None)
         except Exception:
@@ -129,7 +138,7 @@ class WikipediaTool:
                     "format": "json",
                 }
                 async with sess.get(
-                        self._search_url, params=params,
+                        self._search_url, params=params, headers=HTTP_HEADERS,
                         timeout=aiohttp.ClientTimeout(total=TIMEOUT_S)) as r:
                     data = await r.json(content_type=None)
 
@@ -243,7 +252,7 @@ class NewsAPITool:
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(
-                        self._url, params=params,
+                        self._url, params=params, headers=HTTP_HEADERS,
                         timeout=aiohttp.ClientTimeout(total=TIMEOUT_S)) as r:
                     data = await r.json(content_type=None)
         except Exception:
