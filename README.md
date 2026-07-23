@@ -134,7 +134,7 @@ Context priors are computed with **Bayesian shrinkage from the training split on
 | 8 / 10 | `phase8_api.py`, `api/` | FastAPI inference (simple / hardened) |
 | 9 | `agent/` | LangGraph agent + 4 retrieval tools |
 | 11 | `Dockerfile.*`, `docker-compose.yml` | Containerised stack |
-| 12 | `gradio_app.py` | Interactive demo UI |
+| 12 | `gradio_app.py` | Chatbot demo UI (score + verdict + sources) |
 | — | `config.py`, `utils/`, `tests/`, `.github/` | Config, seeding, 80 tests, CI |
 
 ---
@@ -152,7 +152,7 @@ python -m nltk.downloader stopwords punkt punkt_tab opinion_lexicon
 python credibility_detector_phases123.py     # Phases 1–3: build data + features + EDA
 python phase4_baseline_1.py                   # Phase 4: TF-IDF baseline
 uvicorn api.main:app --port 8000              # serve the API  → http://localhost:8000/docs
-python gradio_app.py --standalone             # or the demo UI
+MODEL_DEVICE=cpu python gradio_app.py         # chatbot demo → http://localhost:7860
 ```
 
 ### Train DeBERTa on a GPU (Google Colab)
