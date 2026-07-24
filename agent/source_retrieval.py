@@ -16,10 +16,45 @@ Usage from graph.py:
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
 from .tools import retrieve_all, SourceResult
+
+# Stopwords stripped when building keyword queries and scoring relevance, so a
+# claim searches on its salient terms rather than "the/of/that/…" noise.
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "of", "to", "in", "on", "for", "with",
+    "at", "by", "from", "as", "is", "are", "was", "were", "be", "been", "being",
+    "that", "this", "these", "those", "it", "its", "they", "them", "their", "he",
+    "she", "his", "her", "you", "your", "we", "our", "not", "no", "do", "does",
+    "did", "has", "have", "had", "will", "would", "can", "could", "should", "may",
+    "might", "about", "into", "than", "then", "there", "here", "what", "which",
+    "who", "whom", "how", "when", "where", "why", "all", "any", "some", "more",
+    "most", "other", "such", "only", "own", "same", "just", "said", "says", "say",
+    "new", "one", "two", "contain", "contains", "let", "lets", "make", "makes",
+}
+
+
+def _content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]{3,}", (text or "").lower())
+            if w not in _STOPWORDS}
+
+
+def _keywords(text: str, limit: int = 12) -> list[str]:
+    """Ordered, de-duplicated content words — a focused search query."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for w in re.findall(r"[A-Za-z]{3,}", text or ""):
+        lw = w.lower()
+        if lw in _STOPWORDS or lw in seen:
+            continue
+        seen.add(lw)
+        out.append(w)
+        if len(out) >= limit:
+            break
+    return out
 
 
 @dataclass
@@ -74,20 +109,40 @@ async def retrieve_sources(claim: str, speaker: str = "",
         elif not sr.url:
             deduped.append(sr)
 
-    # Sort: fact-check sources first, then by relevance
-    deduped.sort(key=lambda s: (
-        0 if s.source in ("google_fc", "faiss") else 1,
-        -s.relevance,
-    ))
+    # ── Relevance rerank/filter ──────────────────────────────────────────────
+    # Keyword-search tools (Wikipedia/News) occasionally return tangential hits
+    # (e.g. a TV-episode list for a "microchip" claim). Score each source by how
+    # many of the claim's content words appear in its title (weighted) + snippet,
+    # drop non-fact-check sources with zero overlap, and sort by that relevance.
+    claim_words = _content_words(claim)
 
-    fc_sources = [s for s in deduped
-                  if s.source in ("google_fc", "faiss") and s.score is not None]
+    def _is_fc(s: SourceResult) -> bool:
+        return s.source in ("google_fc", "faiss") and s.score is not None
+
+    def _overlap(s: SourceResult) -> float:
+        title_hits = len(claim_words & _content_words(s.title))
+        snip_hits  = len(claim_words & _content_words(s.snippet))
+        return float(2 * title_hits + snip_hits)
+
+    for s in deduped:
+        s.relevance = _overlap(s)
+
+    # Keep fact-checks always; keep others only if they share ≥1 content word.
+    kept = [s for s in deduped if _is_fc(s) or s.relevance > 0]
+    # Guard: never drop everything just because overlap was thin — fall back to
+    # the original hits if the filter left no non-fact-check sources.
+    if not any(not _is_fc(s) for s in kept) and deduped:
+        kept = deduped
+
+    kept.sort(key=lambda s: (0 if _is_fc(s) else 1, -s.relevance))
+
+    fc_sources = [s for s in kept if _is_fc(s)]
     fc_score   = float(sum(s.score for s in fc_sources) / len(fc_sources)) \
                  if fc_sources else None
 
     bundle = EvidenceBundle(
         claim=claim,
-        sources=[s.to_dict() for s in deduped[:k_each * 4]],
+        sources=[s.to_dict() for s in kept[:k_each * 4]],
         has_fc_result=bool(fc_sources),
         fc_score=fc_score,
         sources_used=sources_used,
@@ -96,13 +151,16 @@ async def retrieve_sources(claim: str, speaker: str = "",
 
 
 def _build_query(claim: str, speaker: str, context: str) -> str:
-    """Build a concise search query from claim metadata."""
-    parts = [claim[:200]]
+    """
+    Build a focused keyword query from the claim's content words (+ speaker).
+    Dropping stopwords sharpens keyword-search tools like Wikipedia — the full
+    sentence with "the/that/…" tends to surface tangential articles. Context
+    (e.g. "a speech") is intentionally excluded as it only adds noise.
+    """
+    parts = _keywords(claim, limit=12)
     if speaker and speaker not in ("unknown", "anonymous_social_media", ""):
         parts.append(speaker)
-    if context and context not in ("unknown", ""):
-        parts.append(context)
-    return " ".join(parts)
+    return " ".join(parts) or claim[:200]
 
 
 def format_evidence_for_llm(bundle: EvidenceBundle, max_sources: int = 4) -> str:
