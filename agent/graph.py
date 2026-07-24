@@ -80,7 +80,7 @@ def node_decompose(state: AgentState) -> AgentState:
     """Sanitise and normalise inputs."""
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "cred123", _HERE / "credibility_detector_phases123.py")
+        "cred123", _HERE / "data_pipeline.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
@@ -98,7 +98,7 @@ def node_classify(state: AgentState) -> AgentState:
     """Run DeBERTa with MC Dropout."""
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "phase5", _HERE / "phase5_deberta.py")
+        "phase5", _HERE / "deberta_model.py")
     p5 = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(p5)
 
@@ -127,7 +127,7 @@ def node_classify(state: AgentState) -> AgentState:
         model.to(device)
 
         # Build features
-        from credibility_detector_phases123 import extract_all_features, get_context_prior
+        from data_pipeline import extract_all_features, get_context_prior
         feats_dict = extract_all_features(state["claim"], state["context"])
         feats = [feats_dict.get(c, 0.0) for c in p5.FEAT_COLS
                  if c not in ("context_credibility_prior", "token_length_approx")]

@@ -8,7 +8,7 @@ from pathlib import Path
 # Allow imports from project root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from credibility_detector_phases123 import normalise_context, CONTEXT_SLOTS
+from data_pipeline import normalise_context, CONTEXT_SLOTS
 
 _KNOWN = set(CONTEXT_SLOTS)
 

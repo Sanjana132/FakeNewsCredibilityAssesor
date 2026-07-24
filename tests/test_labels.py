@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from credibility_detector_phases123 import (
+from data_pipeline import (
     LIAR2_INT_TO_LABEL,
     LIAR2_SCORE,
     MULTIFC_MAP,

@@ -47,14 +47,14 @@ Install:
     pip install transformers-interpret mlflow
 
 Run (Colab T4 recommended for training):
-    python phase5_deberta.py --train
-    python phase5_deberta.py --evaluate
-    python phase5_deberta.py --compare-roberta     # ablation
-    python phase5_deberta.py --predict "Obama tripled the debt" \\
+    python deberta_model.py --train
+    python deberta_model.py --evaluate
+    python deberta_model.py --compare-roberta     # ablation
+    python deberta_model.py --predict "Obama tripled the debt" \\
         --speaker "Barack Obama" --context "a campaign rally"
 
 MacBook Air (MPS):
-    python phase5_deberta.py --train --device mps
+    python deberta_model.py --train --device mps
 """
 
 import argparse
@@ -926,7 +926,7 @@ def predict_single(statement: str, speaker: str = "",
     ckpt   = MODEL_DIR / "deberta_best.pt"
     tok_dir = MODEL_DIR / "deberta_tokenizer"
     if not ckpt.exists():
-        print("No trained model found. Run: python phase5_deberta.py --train")
+        print("No trained model found. Run: python deberta_model.py --train")
         return
 
     tokenizer = AutoTokenizer.from_pretrained(str(tok_dir), use_fast=False)
@@ -937,7 +937,7 @@ def predict_single(statement: str, speaker: str = "",
     # Build the SAME engineered features the model trained on, so single-statement
     # inference matches batch evaluation. (Previously features were omitted, which
     # both crashed the fusion head and would have ignored the sentiment signals.)
-    from credibility_detector_phases123 import (
+    from data_pipeline import (
         normalise_context, get_context_prior, extract_all_features)
     ctx_slot = normalise_context(context)
     prior    = get_context_prior(ctx_slot)
@@ -1028,8 +1028,8 @@ def main():
                        args.context, args.device)
     else:
         print("Specify --train, --evaluate, --predict, or --compare-roberta")
-        print("Example: python phase5_deberta.py --train")
-        print("Example: python phase5_deberta.py --predict 'Taxes cut 50%' "
+        print("Example: python deberta_model.py --train")
+        print("Example: python deberta_model.py --predict 'Taxes cut 50%' "
               "--speaker 'Donald Trump' --context 'a campaign rally'")
 
 

@@ -19,7 +19,7 @@ import pytest
 # Allow project root imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import credibility_detector_phases123 as m
+import data_pipeline as m
 
 FEAT_COLS = [
     "vader_compound", "vader_pos", "vader_neg", "vader_neu",

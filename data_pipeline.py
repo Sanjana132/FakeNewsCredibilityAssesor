@@ -17,15 +17,15 @@ Install:
     python -m nltk.downloader stopwords punkt punkt_tab opinion_lexicon
 
 Run full pipeline:
-    python credibility_detector_phases123.py
+    python data_pipeline.py
 
 Run individual phases:
-    python credibility_detector_phases123.py --phase 1 --local
-    python credibility_detector_phases123.py --phase 2 --relevance
-    python credibility_detector_phases123.py --phase 3
+    python data_pipeline.py --phase 1 --local
+    python data_pipeline.py --phase 2 --relevance
+    python data_pipeline.py --phase 3
 
 Dev / quick run (uses local cache, small sample):
-    python credibility_detector_phases123.py --local --sample 500
+    python data_pipeline.py --local --sample 500
 """
 
 import argparse

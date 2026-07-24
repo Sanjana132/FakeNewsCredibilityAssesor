@@ -18,9 +18,9 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 
 Run after Phase 5 training:
-    python phase5b_calibration.py
-    python phase5b_calibration.py --apply-temp-scaling
-    python phase5b_calibration.py --n-bins 15 --n-passes 30
+    python calibration.py
+    python calibration.py --apply-temp-scaling
+    python calibration.py --n-bins 15 --n-passes 30
 """
 
 import argparse
@@ -56,9 +56,9 @@ set_seed(42)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_phase5():
-    """Import phase5_deberta as a module without running main()."""
+    """Import deberta_model as a module without running main()."""
     spec = importlib.util.spec_from_file_location(
-        "phase5_deberta", _HERE / "phase5_deberta.py")
+        "deberta_model", _HERE / "deberta_model.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

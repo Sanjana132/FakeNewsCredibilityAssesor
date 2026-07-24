@@ -1,0 +1,74 @@
+{
+  "model": "microsoft/deberta-v3-base",
+  "best_epoch": 4,
+  "best_val_MAE": 0.2553,
+  "test": {
+    "loss": 0.151,
+    "MAE": 0.2512,
+    "Pearson_r": 0.5515999794006348,
+    "Spearman_r": 0.5385,
+    "Macro_F1": 0.5548
+  },
+  "per_dataset": {
+    "averitec": {
+      "n": 340,
+      "MAE": 0.2662,
+      "Macro_F1": 0.5038
+    },
+    "fever": {
+      "n": 4597,
+      "MAE": 0.2807,
+      "Macro_F1": 0.49
+    },
+    "liar2": {
+      "n": 2281,
+      "MAE": 0.2029,
+      "Macro_F1": 0.5339
+    },
+    "multifc": {
+      "n": 1732,
+      "MAE": 0.2335,
+      "Macro_F1": 0.5376
+    }
+  },
+  "baseline_MAE": 0.2912,
+  "improvement": 0.0359,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.1652,
+      "loss": 0.1648,
+      "MAE": 0.2722,
+      "Pearson_r": 0.4932999908924103,
+      "Spearman_r": 0.4884,
+      "Macro_F1": 0.5278
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.1496,
+      "loss": 0.1568,
+      "MAE": 0.2611,
+      "Pearson_r": 0.527400016784668,
+      "Spearman_r": 0.513,
+      "Macro_F1": 0.5477
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.1434,
+      "loss": 0.1553,
+      "MAE": 0.2595,
+      "Pearson_r": 0.5320000052452087,
+      "Spearman_r": 0.5203,
+      "Macro_F1": 0.5404
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.1386,
+      "loss": 0.155,
+      "MAE": 0.2553,
+      "Pearson_r": 0.5303000211715698,
+      "Spearman_r": 0.5216,
+      "Macro_F1": 0.5455
+    }
+  ]
+}
