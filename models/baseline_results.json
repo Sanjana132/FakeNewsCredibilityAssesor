@@ -4,30 +4,52 @@
   "n_features": 50013,
   "train": {
     "split": "train",
-    "MAE": 0.2248,
-    "RMSE": 0.2741,
-    "Pearson_r": 0.7297,
-    "Spearman_r": 0.735,
-    "Macro_F1_3class": 0.6305,
-    "n": 71376
+    "MAE": 0.2275,
+    "RMSE": 0.2778,
+    "Pearson_r": 0.7194,
+    "Spearman_r": 0.7236,
+    "Macro_F1_3class": 0.6237,
+    "n": 71308
   },
   "val": {
     "split": "val",
-    "MAE": 0.2867,
-    "RMSE": 0.3481,
-    "Pearson_r": 0.4598,
-    "Spearman_r": 0.4483,
-    "Macro_F1_3class": 0.4884,
-    "n": 8921
+    "MAE": 0.2912,
+    "RMSE": 0.3519,
+    "Pearson_r": 0.4478,
+    "Spearman_r": 0.4355,
+    "Macro_F1_3class": 0.4799,
+    "n": 8940
   },
   "test": {
     "split": "test",
-    "MAE": 0.2877,
-    "RMSE": 0.3478,
-    "Pearson_r": 0.4636,
-    "Spearman_r": 0.4454,
-    "Macro_F1_3class": 0.4933,
-    "n": 8919
+    "MAE": 0.2892,
+    "RMSE": 0.3502,
+    "Pearson_r": 0.4569,
+    "Spearman_r": 0.4412,
+    "Macro_F1_3class": 0.4832,
+    "n": 8950
   },
-  "benchmark_mae": 0.2867
+  "per_dataset": {
+    "averitec": {
+      "n": 340,
+      "MAE": 0.311,
+      "Macro_F1_3class": 0.4904
+    },
+    "fever": {
+      "n": 4597,
+      "MAE": 0.329,
+      "Macro_F1_3class": 0.3962
+    },
+    "liar2": {
+      "n": 2281,
+      "MAE": 0.2286,
+      "Macro_F1_3class": 0.4946
+    },
+    "multifc": {
+      "n": 1732,
+      "MAE": 0.259,
+      "Macro_F1_3class": 0.4602
+    }
+  },
+  "benchmark_mae": 0.2912
 }

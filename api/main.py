@@ -109,7 +109,7 @@ class ModelStore:
     def _load_phase5_module(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            "phase5", _HERE / "phase5_deberta.py")
+            "phase5", _HERE / "deberta_model.py")
         self._p5 = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self._p5)
 
@@ -211,7 +211,7 @@ def _score_tfidf(statement: str, feats: list[float]) -> Optional[float]:
     try:
         import numpy as np
         from scipy.sparse import hstack, csr_matrix
-        from credibility_detector_phases123 import preprocess_for_tfidf
+        from data_pipeline import preprocess_for_tfidf
         text_vec = _store.tfidf_vec.transform([preprocess_for_tfidf(statement)])
         feat_arr = _store.feat_scaler.transform([feats]) if _store.feat_scaler \
                    else np.array([feats])
@@ -247,7 +247,7 @@ async def _full_assessment(req: PredictRequest,
     """Two-stage scoring: DeBERTa always; agent only when score < 0.5."""
     t0 = time.perf_counter()
 
-    from credibility_detector_phases123 import (
+    from data_pipeline import (
         normalise_context, get_context_prior, extract_all_features)
 
     context = normalise_context(req.context)
@@ -257,7 +257,7 @@ async def _full_assessment(req: PredictRequest,
     # 13-vector matches training (otherwise prior + length silently default to 0).
     feats_d["context_credibility_prior"] = prior
     feats_d["token_length_approx"]       = len(str(req.statement)) / 4.0
-    from phase5_deberta import FEAT_COLS
+    from deberta_model import FEAT_COLS
     feats = [feats_d.get(c, 0.0) for c in FEAT_COLS]
 
     # Stage 1 — DeBERTa

@@ -466,7 +466,7 @@ def main():
 
     print(f"\n  Saved: models/baseline_tfidf.pkl")
     print(f"  Saved: models/baseline_results.json")
-    print("✓ Phase 4 complete. Next: python phase5_deberta.py")
+    print("✓ Phase 4 complete. Next: python deberta_model.py")
 
 
 if __name__ == "__main__":

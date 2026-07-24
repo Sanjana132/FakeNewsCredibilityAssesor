@@ -1,0 +1,14 @@
+{
+  "n_test": 8950,
+  "n_bins": 10,
+  "n_passes": 20,
+  "mae": 0.2581,
+  "ECE": 0.0418,
+  "ECE_target": 0.05,
+  "ECE_pass": true,
+  "CI_coverage_90": 0.1958,
+  "CI_coverage_target": 0.9,
+  "CI_coverage_pass": false,
+  "temperature": 1.0771,
+  "ECE_after_scaling": 0.04
+}

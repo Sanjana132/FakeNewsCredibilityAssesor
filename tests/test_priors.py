@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import credibility_detector_phases123 as module
+import data_pipeline as module
 
 
 def _make_df(n_rows: int, context: str, score: float) -> pd.DataFrame:

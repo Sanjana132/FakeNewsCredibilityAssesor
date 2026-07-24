@@ -14,15 +14,15 @@ confidence interval**, a **token-level explanation** of what drove the verdict,
 
 ## Demo
 
-Paste a statement into the chatbot → credibility score, verdict, 90% confidence
-interval, and sources to check the claim against (disputing ones first for
-low-credibility claims).
+Paste a statement into the chatbot and it returns a credibility score, a verdict
+with a 90% confidence interval, and sources to check the claim against — the
+disputing ones surfaced first for low-credibility claims.
 
 <p align="center">
   <img src="assets/chatbot_demo.png" alt="Credibility-detector chatbot: a false vaccine-microchip claim scored 0.34 (Likely False) and a credible unemployment claim scored 0.69, each with sources" width="540">
 </p>
 
-<p align="center"><sub>Actual model outputs — <code>python gradio_app.py</code></sub></p>
+<p align="center"><sub>Actual model outputs from the Gradio chatbot.</sub></p>
 
 ---
 
@@ -33,9 +33,9 @@ low-credibility claims).
 - **Two-model stack**: a transparent **TF-IDF + Ridge** baseline (the MAE floor)
   and a fine-tuned **DeBERTa-v3** regressor with a fusion head over 13 engineered
   features.
-- **Uncertainty you can trust**: **MC-Dropout** confidence intervals plus a
+- **Measured uncertainty**: **MC-Dropout** confidence intervals plus a
   **calibration** pass (reliability diagram, Expected Calibration Error,
-  temperature scaling) — measured, not claimed.
+  temperature scaling).
 - **Explainability**: token-level **SHAP** highlights (green = credibility-raising,
   red = credibility-lowering).
 - **Agentic RAG**: a **LangGraph** pipeline that retrieves evidence from the Google
@@ -45,7 +45,7 @@ low-credibility claims).
   Redis cache, SSE streaming), **Docker Compose** stack, **80 unit tests**, and
   **GitHub Actions CI**.
 - **Reproducible**: global seeding, train-only data-driven priors (no leakage),
-  and one-click **Google Colab GPU** notebooks.
+  and a one-click **Google Colab GPU** training notebook.
 
 ---
 
@@ -66,11 +66,10 @@ political-claims slice, not carried by one easy corpus:
 |-------|-------:|--------:|---------:|------:|
 | Test MAE ↓ | **0.203** | 0.234 | 0.266 | 0.281 |
 
-*3-class buckets: false (<0.35), mixed (0.35–0.65), true (≥0.65). DeBERTa best
-epoch 4, val MAE 0.2553. Reproduce with `python phase5_deberta.py --train
---device cuda --amp`; metrics are written to `models/deberta_results.json`.*
+<sub>3-class buckets: false (<0.35), mixed (0.35–0.65), true (≥0.65). Best epoch 4,
+validation MAE 0.2553. Metrics are written to `models/deberta_results.json`.</sub>
 
-### Calibration & uncertainty (measured, `models/calibration.json`)
+### Calibration & uncertainty
 
 | Metric | Value | Target | Status |
 |--------|------:|-------:|:------:|
@@ -79,10 +78,11 @@ epoch 4, val MAE 0.2553. Reproduce with `python phase5_deberta.py --train
 | MC-Dropout 90% CI coverage | 0.196 | ≈ 0.90 | ❌ fail |
 
 The **point estimates are well-calibrated** (ECE 0.042 over 8,950 test claims).
-The **MC-Dropout confidence intervals are honestly reported as over-confident** —
-90% coverage is only 0.196, i.e. the intervals are far too narrow, a known
-limitation of MC-Dropout. Fixing coverage with conformal prediction (MAPIE) is on
-the roadmap; the point score and its calibration are the trustworthy signal today.
+The **MC-Dropout confidence intervals are over-confident** — 90% coverage is only
+0.196, i.e. the intervals are too narrow, a known limitation of MC-Dropout.
+Conformal calibration (MAPIE) to fix coverage is on the roadmap; the point score
+and its calibration are the trustworthy signal today. Numbers are written to
+`models/calibration.json`.
 
 ---
 
@@ -90,29 +90,29 @@ the roadmap; the point score and its calibration are the trustworthy signal toda
 
 ```
                  ┌─────────────────────────────────────────────┐
-  raw claim ───► │ Phase 1–2  clean · normalise context (22     │
-  + speaker      │            venues) · 13 engineered features  │
-  + context      │            (VADER + opinion lexicon +        │
-                 │            context×sentiment interactions)   │
+  raw claim ───► │ Data pipeline   clean · normalise context    │
+  + speaker      │ (22 venues) · 13 engineered features         │
+  + context      │ (VADER + opinion lexicon +                   │
+                 │  context×sentiment interactions)             │
                  └───────────────┬─────────────────────────────┘
                                  ▼
         ┌────────────────────────┴───────────────────────┐
         ▼                                                 ▼
  ┌───────────────┐                            ┌──────────────────────────┐
  │ TF-IDF+Ridge  │  baseline MAE floor        │ DeBERTa-v3 encoder        │
- │ (Phase 4)     │                            │ mean-pool → LayerNorm     │
+ │ baseline      │                            │ mean-pool → LayerNorm     │
  └───────────────┘                            │ ⊕ standardised features   │
                                               │ → fusion head → score     │
                                               │ + MC-Dropout 90% CI       │
                                               └────────────┬─────────────┘
                                                            ▼
-        Phase 5b calibration (ECE, reliability, temperature scaling)
+              calibration (ECE, reliability, temperature scaling)
                                                            ▼
-   if score < 0.5 ──► LangGraph agent (Phase 9): retrieve evidence
+   if score < 0.5 ──► LangGraph retrieval agent: gather evidence
         (Google Fact Check · Wikipedia · FAISS · NewsAPI) ──► Mistral-7B
-        (QLoRA, Phase 7) writes a grounded justification
+        (QLoRA) writes a grounded justification
                                                            ▼
-   FastAPI service (Phase 8/10) · Gradio demo (Phase 12) · Docker (Phase 11)
+        FastAPI service · Gradio chatbot · Docker Compose stack
 ```
 
 ---
@@ -129,58 +129,61 @@ the roadmap; the point score and its calibration are the trustworthy signal toda
 All labels are mapped to a single **0.0–1.0** credibility scale, deduplicated,
 and split 80/10/10 with **joint stratification** on credibility bucket × dataset.
 Context priors are computed with **Bayesian shrinkage from the training split only**
-— val/test labels never leak into features.
+— validation/test labels never leak into features.
 
 ---
 
 ## Repository layout
 
-| Phase | File(s) | Purpose |
-|-------|---------|---------|
-| 1–3 | `credibility_detector_phases123.py` | Load/merge datasets, feature engineering, EDA |
-| 4 | `phase4_baseline_1.py` | TF-IDF + Ridge baseline + SHAP |
-| 5 | `phase5_deberta.py` | DeBERTa-v3 fine-tuning, MC-Dropout CIs |
-| 5b | `phase5b_calibration.py` | Reliability diagram, ECE, temperature scaling |
-| 6 | `context_encoder.py`, `phase6_speaker_profiler.py` | Context embeddings, Bayesian speaker profiles |
-| 7 | `llm_finetune.py`, `phase7_shap_explainer.py` | Mistral-7B QLoRA, token SHAP |
-| 8 / 10 | `phase8_api.py`, `api/` | FastAPI inference (simple / hardened) |
-| 9 | `agent/` | LangGraph agent + 4 retrieval tools |
-| 11 | `Dockerfile.*`, `docker-compose.yml` | Containerised stack |
-| 12 | `gradio_app.py` | Chatbot demo UI (score + verdict + sources) |
-| — | `config.py`, `utils/`, `tests/`, `.github/` | Config, seeding, 80 tests, CI |
+| Component | Module(s) | Purpose |
+|-----------|-----------|---------|
+| Data pipeline | `data_pipeline.py` | Load/merge datasets, normalise context, engineer 13 features, EDA |
+| Baseline | `baseline_model.py` | TF-IDF + Ridge regressor + SHAP (the MAE benchmark) |
+| Credibility model | `deberta_model.py` | DeBERTa-v3 fine-tuning, fusion head, MC-Dropout intervals |
+| Calibration | `calibration.py` | Reliability diagram, ECE, temperature scaling |
+| Source profiles | `context_encoder.py`, `speaker_profiler.py` | Learned context embeddings, Bayesian speaker credibility |
+| Explainability | `shap_explainer.py` | Token-level SHAP attributions |
+| Justification LLM | `llm_finetune.py` | Mistral-7B QLoRA evidence-grounded justifications |
+| Retrieval agent | `agent/` | LangGraph pipeline + 4 evidence-retrieval tools |
+| Serving API | `api/` | Hardened FastAPI service (auth, rate limiting, Redis cache, SSE) |
+| Chatbot demo | `gradio_app.py` | Conversational UI (score + verdict + sources) |
+| Evidence scraper | `speaker_scraper.py` | PolitiFact/Snopes metadata → FAISS index |
+| Infrastructure | `Dockerfile.*`, `docker-compose.yml` | Containerised API / LLM / demo stack |
+| Core | `config.py`, `utils/`, `tests/`, `.github/` | Config, seeding, 80 tests, CI |
 
 ---
 
-## Quickstart
+## Usage
 
-### Local (CPU is fine for phases 1–4; DeBERTa/Mistral want a GPU)
+**Install and build the dataset**
 
 ```bash
 git clone https://github.com/Sanjana132/FakeNewsCredibilityAssesor.git
 cd FakeNewsCredibilityAssesor
-pip install -r requirements.api.txt          # inference/data stack
+pip install -r requirements.api.txt
 python -m nltk.downloader stopwords punkt punkt_tab opinion_lexicon
-
-python credibility_detector_phases123.py     # Phases 1–3: build data + features + EDA
-python phase4_baseline_1.py                   # Phase 4: TF-IDF baseline
-uvicorn api.main:app --port 8000              # serve the API  → http://localhost:8000/docs
-MODEL_DEVICE=cpu python gradio_app.py         # chatbot demo → http://localhost:7860
+python data_pipeline.py        # load 4 datasets, engineer features, run EDA
+python baseline_model.py       # TF-IDF + Ridge baseline
 ```
 
-### Train DeBERTa on a GPU (Google Colab)
-
-Open **`colab_train_from_git.ipynb`** in Colab (`Runtime → T4 GPU → Run all`).
-It clones this repo, installs the training stack, builds the data, and runs:
+**Train the credibility model** (GPU) — the `colab_train_from_git.ipynb` notebook
+runs the full pipeline on a free Colab T4:
 
 ```bash
-python phase5_deberta.py --train --device cuda
+python deberta_model.py --train --device cuda --amp
+python calibration.py --device cuda
 ```
 
-### Run the full stack with Docker
+**Serve**
 
 ```bash
-docker compose up redis api admin            # API + demo (+ llm service on a GPU host)
+uvicorn api.main:app --port 8000     # REST API → /docs
+python gradio_app.py                 # chatbot demo → localhost:7860
+docker compose up redis api admin    # or the full containerised stack
 ```
+
+Optional retrieval keys enrich the agent's sources: `GOOGLE_FACTCHECK_API_KEY`
+(fact-check verdicts, free) and `NEWSAPI_KEY`. Wikipedia retrieval needs no key.
 
 ---
 
@@ -188,24 +191,25 @@ docker compose up redis api admin            # API + demo (+ llm service on a GP
 
 ```bash
 pip install -r requirements.dev.txt
-pytest tests/ -v                              # 80 tests
+pytest tests/
 ```
 
-Tests cover context normalisation, every dataset's label map, feature arithmetic,
-the Bayesian-prior shrinkage (including the **train-only / no-leakage invariant**),
-and a 200-row end-to-end pipeline smoke test. GitHub Actions runs them on every push.
+The **80 tests** cover context normalisation, every dataset's label map, feature
+arithmetic, the Bayesian-prior shrinkage (including the **train-only / no-leakage
+invariant**), and a 200-row end-to-end pipeline smoke test. GitHub Actions runs
+them on every push against a minimal dependency set.
 
 ---
 
-## Engineering notes (things done deliberately right)
+## Engineering practices
 
 - **No data leakage** — context priors are fit on the train split only; a unit
-  test asserts they're identical whether or not val/test rows exist.
+  test asserts they are identical whether or not validation/test rows exist.
 - **Reproducibility** — `set_seed(42)` seeds Python/NumPy/PyTorch/langdetect at
-  every entrypoint; dataset sampling is `shuffle(seed)`-then-select, never first-N.
-- **Honest uncertainty** — calibration is *measured* and reported both ways:
-  ECE 0.042 (point scores well-calibrated) **and** the failing MC-Dropout CI
-  coverage (0.196). Nothing is claimed without the numbers in `models/calibration.json`.
+  every entrypoint; dataset sampling shuffles before selecting, never first-N.
+- **Measured uncertainty** — calibration is reported both ways: ECE 0.042 (point
+  scores well-calibrated) and the failing MC-Dropout CI coverage (0.196). Nothing
+  is claimed without the numbers behind it.
 - **Feature/serving parity** — the API computes inference features via the exact
   training function, so production scores match evaluation.
 
@@ -213,13 +217,12 @@ and a 200-row end-to-end pipeline smoke test. GitHub Actions runs them on every 
 
 - Labels come from fact-checkers and inherit their topical and temporal biases;
   the score reflects "how fact-checkers would rate this", not absolute ground truth.
-- **MC-Dropout intervals are over-confident** (90% CI coverage 0.196) — trust the
-  calibrated point score, not the interval width, until conformal calibration lands.
-- The Mistral justification layer and FAISS evidence index are optional and need a
-  GPU / scraped index respectively.
-- **Roadmap (not implemented):** conformal prediction intervals (MAPIE) to fix CI
-  coverage, continuous learning from user feedback, drift monitoring (Evidently),
-  and a managed cloud deployment.
+- **MC-Dropout intervals are over-confident** (90% CI coverage 0.196) — the
+  calibrated point score is the reliable signal until conformal calibration lands.
+- The Mistral justification layer and FAISS evidence index are optional and require
+  a GPU and a scraped index respectively.
+- **Roadmap:** conformal prediction intervals (MAPIE) to fix CI coverage,
+  continuous learning from user feedback, drift monitoring, and cloud deployment.
 
 ---
 
@@ -227,6 +230,6 @@ and a 200-row end-to-end pipeline smoke test. GitHub Actions runs them on every 
 
 MIT — see `LICENSE`.
 
-*Built as an end-to-end ML engineering portfolio project: data pipeline →
-classical baseline → transformer fine-tuning → calibration → LLM + RAG agent →
-API → containerisation → tests/CI.*
+*An end-to-end ML engineering project: data pipeline → classical baseline →
+transformer fine-tuning → calibration → LLM + RAG agent → API → containerisation
+→ tests / CI.*

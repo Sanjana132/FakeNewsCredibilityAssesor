@@ -49,7 +49,7 @@ def _load_once():
     import torch
     from transformers import AutoTokenizer
 
-    spec = importlib.util.spec_from_file_location("phase5", _HERE / "phase5_deberta.py")
+    spec = importlib.util.spec_from_file_location("phase5", _HERE / "deberta_model.py")
     _P5 = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(_P5)
 
@@ -72,7 +72,7 @@ def _load_once():
 
 def _score(text: str, speaker: str = "", context: str = "unknown") -> dict:
     _load_once()
-    from credibility_detector_phases123 import (
+    from data_pipeline import (
         normalise_context, get_context_prior, extract_all_features)
     ctx   = normalise_context(context)
     prior = float(get_context_prior(ctx))

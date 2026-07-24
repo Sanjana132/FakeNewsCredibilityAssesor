@@ -29,9 +29,9 @@ Install:
     pip install shap transformers torch pandas numpy matplotlib
 
 Run:
-    python phase7_shap_explainer.py
-    python phase7_shap_explainer.py --n-examples 20  # more examples in HTML
-    python phase7_shap_explainer.py --claim "Obama tripled the deficit" \\
+    python shap_explainer.py
+    python shap_explainer.py --n-examples 20  # more examples in HTML
+    python shap_explainer.py --claim "Obama tripled the deficit" \\
         --speaker "Barack Obama" --context "a campaign rally"
 """
 
@@ -78,7 +78,7 @@ def load_model_and_tokenizer():
     # Import model class from phase5
     import importlib.util, sys
     spec = importlib.util.spec_from_file_location(
-        "phase5", _HERE / "phase5_deberta.py")
+        "phase5", _HERE / "deberta_model.py")
     p5 = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(p5)
 
@@ -419,7 +419,7 @@ def main():
     # ── Global importance plot ───────────────────────────────────────────────
     global_token_importance(test_df, n_rows=args.n_global)
 
-    print("\n✓ Phase 7 complete. Next: python phase8_api.py")
+    print("\n✓ SHAP explanations complete. Serve with: uvicorn api.main:app")
 
 
 if __name__ == "__main__":

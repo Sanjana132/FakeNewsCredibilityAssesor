@@ -19,8 +19,8 @@ RUN python -c "import nltk; \
     nltk.download('opinion_lexicon', quiet=True)"
 
 # Application code
-COPY credibility_detector_phases123.py .
-COPY phase5_deberta.py .
+COPY data_pipeline.py .
+COPY deberta_model.py .
 COPY context_encoder.py .
 COPY config.py .
 COPY utils/ ./utils/

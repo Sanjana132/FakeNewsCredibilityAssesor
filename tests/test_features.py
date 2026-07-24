@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import credibility_detector_phases123 as module
+import data_pipeline as module
 
 
 FEAT_KEYS = {

@@ -25,9 +25,9 @@ Install:
     pip install pandas numpy matplotlib seaborn scipy
 
 Run:
-    python phase6_speaker_profiler.py
-    python phase6_speaker_profiler.py --min-claims 5   # raise minimum threshold
-    python phase6_speaker_profiler.py --with-predictions  # use DeBERTa scores if available
+    python speaker_profiler.py
+    python speaker_profiler.py --min-claims 5   # raise minimum threshold
+    python speaker_profiler.py --with-predictions  # use DeBERTa scores if available
 """
 
 import argparse
@@ -366,7 +366,7 @@ def main():
     print_summary(profiles, args.min_claims)
     save_profiles(profiles, global_mean, args.min_claims)
 
-    print("\n✓ Phase 6 complete. Next: python phase7_shap_explainer.py")
+    print("\n✓ Phase 6 complete. Next: python shap_explainer.py")
 
 
 if __name__ == "__main__":

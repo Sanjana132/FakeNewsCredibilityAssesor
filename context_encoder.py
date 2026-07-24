@@ -38,7 +38,7 @@ EDA_DIR.mkdir(parents=True, exist_ok=True)
 
 sys.path.insert(0, str(_HERE))
 
-# Keep in sync with credibility_detector_phases123.CONTEXT_SLOTS
+# Keep in sync with data_pipeline.CONTEXT_SLOTS
 CONTEXT_SLOTS = [
     "a speech", "a TV interview", "a campaign rally", "a press release",
     "a Twitter post", "a Facebook post", "a debate", "an ad",

@@ -2,7 +2,7 @@
 # Minimal dependency set needed to run the pytest suite in tests/.
 #
 # The unit tests exercise only the data pipeline and feature engineering
-# (credibility_detector_phases123.py, config.py, utils/seed.py). They do NOT
+# (data_pipeline.py, config.py, utils/seed.py). They do NOT
 # import torch, transformers, faiss, gradio, shap, fastapi, etc. — so CI
 # installs just this lean set for a fast, deterministic run instead of the full
 # requirements.api.txt (whose heavy binary deps are slow and fragile to resolve).
