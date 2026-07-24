@@ -11,7 +11,7 @@ pip install -U "huggingface_hub[cli]"
 huggingface-cli login          # paste a WRITE token from hf.co/settings/tokens
 ```
 
-Replace `Sanjana132` below with your HF username if different.
+Replace `SanjanaR132` below with your HF username if different.
 
 ---
 
@@ -21,7 +21,7 @@ From the project root (where the `models/` folder lives):
 
 ```bash
 huggingface-cli repo create credibility-detector-deberta --type model -y
-huggingface-cli upload Sanjana132/credibility-detector-deberta ./models . --repo-type model
+huggingface-cli upload SanjanaR132/credibility-detector-deberta ./models . --repo-type model
 ```
 
 This pushes `deberta_best.pt`, `deberta_tokenizer/`, and `speaker_profiles.json`
@@ -38,7 +38,7 @@ bash deploy/hf_space/build_space.sh      # → deploy/hf_space/build/
 ```bash
 huggingface-cli repo create credibility-detector --type space --space_sdk gradio -y
 
-git clone https://huggingface.co/spaces/Sanjana132/credibility-detector space_repo
+git clone https://huggingface.co/spaces/SanjanaR132/credibility-detector space_repo
 cp -r deploy/hf_space/build/* space_repo/
 cd space_repo
 git add .
@@ -47,14 +47,14 @@ git push
 ```
 
 The Space builds automatically (~5–10 min the first time) and goes live at
-`https://huggingface.co/spaces/Sanjana132/credibility-detector`.
+`https://huggingface.co/spaces/SanjanaR132/credibility-detector`.
 
 ---
 
 ## Configuration (Space → Settings)
 
 - **`MODEL_REPO`** (Variable) — only if your model repo name differs from the
-  default `Sanjana132/credibility-detector-deberta`.
+  default `SanjanaR132/credibility-detector-deberta`.
 - **`HF_TOKEN`** (Secret) — only if you made the model repo **private**.
 - Optional retrieval keys as Secrets for richer sources:
   `GOOGLE_FACTCHECK_API_KEY` (fact-check verdicts), `NEWSAPI_KEY`.

@@ -16,7 +16,7 @@ MODELS  = _HERE / "models"
 MODELS.mkdir(exist_ok=True)
 
 # HF model repo holding deberta_best.pt, deberta_tokenizer/, speaker_profiles.json
-MODEL_REPO = os.environ.get("MODEL_REPO", "Sanjana132/credibility-detector-deberta")
+MODEL_REPO = os.environ.get("MODEL_REPO", "SanjanaR132/credibility-detector-deberta")
 
 
 def _provision() -> None:
