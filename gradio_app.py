@@ -184,9 +184,11 @@ EXAMPLES = [
 
 
 def build_ui() -> gr.ChatInterface:
-    # Gradio 6 ChatInterface always uses the "messages" format and has no `type`
-    # or `theme` kwarg (theme is set on launch/Blocks instead).
-    return gr.ChatInterface(
+    # Gradio 6 dropped the `type`/`theme` kwargs; Gradio 5 (what HF Spaces
+    # installs) still has `type` and needs "messages" to avoid the deprecated
+    # tuples format. Pass it only when the running version accepts it.
+    import inspect
+    kwargs = dict(
         fn=respond,
         title="🔍 Fake News & Source Credibility Detector",
         description=(
@@ -196,6 +198,9 @@ def build_ui() -> gr.ChatInterface:
         ),
         examples=EXAMPLES,
     )
+    if "type" in inspect.signature(gr.ChatInterface.__init__).parameters:
+        kwargs["type"] = "messages"
+    return gr.ChatInterface(**kwargs)
 
 
 if __name__ == "__main__":

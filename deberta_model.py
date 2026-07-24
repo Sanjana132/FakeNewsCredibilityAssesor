@@ -75,7 +75,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import mlflow
 from tqdm import tqdm
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import f1_score, mean_absolute_error
@@ -659,6 +658,8 @@ def train(model_name: str = DEFAULT_MODEL,
           device_str: str = None,
           epochs: int = None,
           use_amp: bool = False) -> dict:
+
+    import mlflow   # training-only dependency (kept out of the inference stack)
 
     device   = detect_device(device_str)
     n_epochs = epochs if epochs is not None else EPOCHS
