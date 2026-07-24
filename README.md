@@ -12,6 +12,18 @@ confidence interval**, a **token-level explanation** of what drove the verdict,
 > Regression, not classification: "0.18 ± 0.06 — Likely False" is more honest and
 > more useful than a hard "FAKE", and it lets the system express uncertainty.
 
+## Demo
+
+Paste a statement into the chatbot → credibility score, verdict, 90% confidence
+interval, and sources to check the claim against (disputing ones first for
+low-credibility claims).
+
+<p align="center">
+  <img src="assets/chatbot_demo.png" alt="Credibility-detector chatbot: a false vaccine-microchip claim scored 0.34 (Likely False) and a credible unemployment claim scored 0.69, each with sources" width="540">
+</p>
+
+<p align="center"><sub>Actual model outputs — <code>python gradio_app.py</code></sub></p>
+
 ---
 
 ## Highlights
