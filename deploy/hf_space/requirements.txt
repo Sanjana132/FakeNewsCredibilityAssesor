@@ -1,0 +1,20 @@
+# Lean inference stack for the Hugging Face Space (CPU).
+# gradio itself is pinned via `sdk_version` in README.md, not here.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+transformers>=4.36.0
+sentencepiece
+protobuf
+huggingface_hub
+aiohttp
+nltk
+vaderSentiment
+langdetect
+scikit-learn
+scipy
+pandas
+numpy
+matplotlib
+seaborn
+joblib
+tqdm
