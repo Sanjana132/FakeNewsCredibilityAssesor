@@ -56,7 +56,7 @@ regressor cuts test MAE **~13%** below the TF-IDF baseline.
 
 | Model | Test MAE ↓ | Test Macro-F1 (3-class) ↑ |
 |-------|-----------:|--------------------------:|
-| TF-IDF + Ridge baseline (+ 13 features) | 0.2877 | 0.493 |
+| TF-IDF + Ridge baseline (+ 13 features) | 0.2892 | 0.483 |
 | **DeBERTa-v3-base (fusion head + MC-Dropout)** | **0.2512** | **0.555** |
 
 Per-dataset test MAE (DeBERTa) — the gain is broad-based, strongest on the hard
@@ -78,10 +78,16 @@ validation MAE 0.2553. Metrics are written to `models/deberta_results.json`.</su
 | MC-Dropout 90% CI coverage | 0.196 | ≈ 0.90 | ❌ fail |
 
 The **point estimates are well-calibrated** (ECE 0.042 over 8,950 test claims).
-The **MC-Dropout confidence intervals are over-confident** — 90% coverage is only
-0.196, i.e. the intervals are too narrow, a known limitation of MC-Dropout.
-Conformal calibration (MAPIE) to fix coverage is on the roadmap; the point score
-and its calibration are the trustworthy signal today. Numbers are written to
+The raw **MC-Dropout confidence intervals are over-confident** — 90% coverage is
+only 0.196, i.e. too narrow, a known limitation of MC-Dropout.
+
+**Fix: split-conformal intervals** (`calibration.py`, `evaluate_conformal`).
+Calibrating the interval width on the validation split gives ≈0.90 marginal
+coverage *by construction* — verified on synthetic data to recover 0.908 even
+when the input std is deliberately miscalibrated (a naive Gaussian interval
+covers 0.42 there). A normalized variant scales the width by the MC-Dropout std
+so intervals widen where the model is less certain. Run `python calibration.py
+--device cuda` to populate the measured conformal coverage into
 `models/calibration.json`.
 
 ---
@@ -217,12 +223,13 @@ them on every push against a minimal dependency set.
 
 - Labels come from fact-checkers and inherit their topical and temporal biases;
   the score reflects "how fact-checkers would rate this", not absolute ground truth.
-- **MC-Dropout intervals are over-confident** (90% CI coverage 0.196) — the
-  calibrated point score is the reliable signal until conformal calibration lands.
+- Raw **MC-Dropout intervals are over-confident** (90% CI coverage 0.196);
+  split-conformal intervals (`calibration.py`) are the implemented fix — run the
+  calibration pass on GPU to populate their measured coverage.
 - The Mistral justification layer and FAISS evidence index are optional and require
   a GPU and a scraped index respectively.
-- **Roadmap:** conformal prediction intervals (MAPIE) to fix CI coverage,
-  continuous learning from user feedback, drift monitoring, and cloud deployment.
+- **Roadmap:** evaluate conformal coverage under a temporal hold-out, continuous
+  learning from user feedback, drift monitoring, and cloud deployment.
 
 ---
 

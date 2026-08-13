@@ -188,6 +188,75 @@ def compute_ci_coverage(y_true: np.ndarray, y_mean: np.ndarray,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 3b. CONFORMAL PREDICTION INTERVALS  (fixes MC-Dropout's broken coverage)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# MC-Dropout intervals are badly over-confident here (measured ~0.20 coverage vs
+# a 0.90 target) because dropout captures only a sliver of predictive
+# uncertainty. Split-conformal prediction instead calibrates the interval width
+# on a held-out set so that marginal coverage is ≈(1-α) BY CONSTRUCTION, with a
+# finite-sample guarantee and no distributional assumption beyond exchangeability.
+
+def conformal_quantile(scores: np.ndarray, alpha: float = 0.10) -> float:
+    """
+    Split-conformal quantile: the ⌈(n+1)(1-α)⌉ / n empirical quantile of the
+    calibration nonconformity scores. Using this as the interval half-width (or
+    scale) guarantees ≥ 1-α marginal coverage on exchangeable test data.
+    """
+    n = int(len(scores))
+    if n == 0:
+        return 0.0
+    level = min(1.0, np.ceil((n + 1) * (1 - alpha)) / n)
+    return float(np.quantile(scores, level, method="higher"))
+
+
+def evaluate_conformal(cal_true: np.ndarray, cal_mean: np.ndarray, cal_std: np.ndarray,
+                       test_true: np.ndarray, test_mean: np.ndarray, test_std: np.ndarray,
+                       alpha: float = 0.10) -> dict:
+    """
+    Calibrate split-conformal intervals on the calibration split (val) and
+    evaluate their coverage/width on test. Two variants:
+
+      • standard   — constant half-width q̂ from the |y-ŷ| residual quantile.
+      • normalized — locally adaptive: half-width = q̂ · MC-Dropout std, so the
+                     interval is wider where the model is less certain. Conformal
+                     re-scales the (miscalibrated) std to hit the target coverage.
+
+    Both attain ≈(1-α) coverage by construction; scores are clipped to [0,1].
+    """
+    eps    = 1e-6
+    target = 1.0 - alpha
+
+    def _clipped_width(mean, half):
+        lo = np.clip(mean - half, 0.0, 1.0)
+        hi = np.clip(mean + half, 0.0, 1.0)
+        return float((hi - lo).mean())
+
+    # ── Standard (constant width) ──
+    q_std  = conformal_quantile(np.abs(cal_true - cal_mean), alpha)
+    cov_std = float(((test_true >= test_mean - q_std) &
+                     (test_true <= test_mean + q_std)).mean())
+
+    # ── Normalized (locally adaptive) ──
+    q_norm = conformal_quantile(np.abs(cal_true - cal_mean) / (cal_std + eps), alpha)
+    half_n = q_norm * (test_std + eps)
+    cov_norm = float(((test_true >= test_mean - half_n) &
+                      (test_true <= test_mean + half_n)).mean())
+
+    return {
+        "alpha":                     alpha,
+        "target_coverage":           round(target, 4),
+        "n_calibration":             int(len(cal_true)),
+        "q_hat":                     round(q_std, 4),
+        "conformal_coverage":        round(cov_std, 4),
+        "conformal_mean_width":      round(_clipped_width(test_mean, q_std), 4),
+        "q_hat_normalized":          round(q_norm, 4),
+        "conformal_norm_coverage":   round(cov_norm, 4),
+        "conformal_norm_mean_width": round(_clipped_width(test_mean, half_n), 4),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 4. TEMPERATURE SCALING
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -308,6 +377,8 @@ def main():
                     help="Cap test rows for speed testing")
     ap.add_argument("--apply-temp-scaling", action="store_true",
                     help="Fit temperature on val set and re-evaluate")
+    ap.add_argument("--conformal-alpha", type=float, default=0.10,
+                    help="Miscoverage level for conformal intervals (0.10 → 90%%)")
     args = ap.parse_args()
 
     print("=" * 60)
@@ -335,6 +406,25 @@ def main():
     print(f"  90% CI coverage       : {coverage:.4f}  "
           f"({'✓ OK' if abs(coverage - 0.90) <= 0.05 else '⚠ OFF TARGET'})")
 
+    # ── Validation-set predictions (calibration set for temp scaling +
+    #     conformal). Collected once and reused. ───────────────────────────
+    print("\n  Collecting val-set predictions (calibration set)…")
+    y_val_true, y_val_mean, y_val_std = collect_predictions(
+        p5, model, tokenizer, device,
+        split="val", n_passes=args.n_passes, max_rows=args.max_rows)
+
+    # ── Conformal prediction intervals (fixes the MC-Dropout coverage) ────
+    conf = evaluate_conformal(
+        y_val_true, y_val_mean, y_val_std,
+        y_true, y_mean, y_std, alpha=args.conformal_alpha)
+    print(f"\n  ── Conformal intervals (calibrated on {conf['n_calibration']} val rows) ──")
+    print(f"  Target coverage        : {conf['target_coverage']:.2f}")
+    print(f"  MC-Dropout coverage    : {coverage:.4f}   (broken — over-confident)")
+    print(f"  Conformal  (constant)  : {conf['conformal_coverage']:.4f}   "
+          f"±{conf['q_hat']:.3f}, mean width {conf['conformal_mean_width']:.3f}")
+    print(f"  Conformal  (normalized): {conf['conformal_norm_coverage']:.4f}   "
+          f"mean width {conf['conformal_norm_mean_width']:.3f}")
+
     # ── Temperature scaling (optional) ───────────────────────────────────
     T = 1.0
     ece_cal = None
@@ -342,9 +432,6 @@ def main():
 
     if args.apply_temp_scaling or ece > 0.05 or abs(coverage - 0.90) > 0.05:
         print("\n  Fitting temperature scaling on val set…")
-        y_val_true, y_val_mean, _ = collect_predictions(
-            p5, model, tokenizer, device,
-            split="val", n_passes=args.n_passes, max_rows=args.max_rows)
         T = fit_temperature(y_val_true, y_val_mean)
         print(f"  Temperature T = {T:.4f}")
 
@@ -379,16 +466,19 @@ def main():
         "CI_coverage_pass":     bool(abs(coverage - 0.90) <= 0.05),
         "temperature":          round(T, 4),
         "ECE_after_scaling":    round(ece_cal, 4) if ece_cal is not None else None,
+        # Conformal intervals — the calibrated replacement for the MC-Dropout CI.
+        "conformal": conf,
     }
     out_path = MODEL_DIR / "calibration.json"
     out_path.write_text(json.dumps(cal_results, indent=2))
     print(f"\n  Saved: models/calibration.json")
 
     print("\n  Summary:")
-    print(f"    ECE          : {ece:.4f}  (target < 0.05) "
+    print(f"    ECE               : {ece:.4f}  (target < 0.05) "
           f"{'✓' if ece <= 0.05 else '✗'}")
-    print(f"    90% coverage : {coverage:.4f}  (target ≈ 0.90) "
-          f"{'✓' if abs(coverage-0.90) <= 0.05 else '✗'}")
+    print(f"    MC-Dropout 90% cov: {coverage:.4f}  (broken) ✗")
+    print(f"    Conformal 90% cov : {conf['conformal_coverage']:.4f}  (target ≈ 0.90) "
+          f"{'✓' if abs(conf['conformal_coverage']-0.90) <= 0.05 else '✗'}")
     if T != 1.0:
         print(f"    Temperature T: {T:.4f}  (applied to production scorer)")
     print("\n✓ Phase 5b complete.")
