@@ -41,5 +41,4 @@ Thumbs.db
 deploy/hf_space/build/
 
 # Personal interview-prep notes (local only)
-INTERVIEW_PREP.md
-INTERVIEW_GUIDE.md
+INTERVIEW_*.md
