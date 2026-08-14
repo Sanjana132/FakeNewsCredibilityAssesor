@@ -7,8 +7,8 @@ app downloads it at startup.
 Prerequisites: a free account at https://huggingface.co and the CLI:
 
 ```bash
-pip install -U "huggingface_hub[cli]"
-huggingface-cli login          # paste a WRITE token from hf.co/settings/tokens
+pip install -U huggingface_hub
+hf auth login          # paste a WRITE token from hf.co/settings/tokens
 ```
 
 Replace `SanjanaR132` below with your HF username if different.
@@ -20,8 +20,8 @@ Replace `SanjanaR132` below with your HF username if different.
 From the project root (where the `models/` folder lives):
 
 ```bash
-huggingface-cli repo create credibility-detector-deberta --type model -y
-huggingface-cli upload SanjanaR132/credibility-detector-deberta ./models . --repo-type model
+hf repo create credibility-detector-deberta --repo-type model
+hf upload SanjanaR132/credibility-detector-deberta ./models . --repo-type model
 ```
 
 This pushes `deberta_best.pt`, `deberta_tokenizer/`, and `speaker_profiles.json`
@@ -36,7 +36,7 @@ bash deploy/hf_space/build_space.sh      # → deploy/hf_space/build/
 ## 3 · Create the Space and push
 
 ```bash
-huggingface-cli repo create credibility-detector --type space --space_sdk gradio -y
+hf repo create credibility-detector --repo-type space --sdk gradio
 
 git clone https://huggingface.co/spaces/SanjanaR132/credibility-detector space_repo
 cp -r deploy/hf_space/build/* space_repo/
