@@ -1,32 +1,20 @@
 """
-Phase 12 — Chatbot Demo
+Chatbot Demo — thin UI over the agent pipeline.
 
-A conversational UI for the credibility detector: paste a news statement or
-article and the bot replies with
-
-  • a credibility score (0–1) + verdict + 90% confidence interval,
-  • a short interpretation, and
-  • sources to check the claim against (fact-checks / evidence), pulled from the
-    retrieval agent — the disputing ones surfaced first for low-credibility claims.
-
-The DeBERTa model is loaded ONCE and cached, so replies are fast after the first.
+This file is PRESENTATION ONLY: it calls agent.pipeline.assess(claim) → Verdict
+and formats the result as chat markdown. All decision logic (gate, scoring,
+retrieval, NLI stance, tier selection) lives in agent/pipeline.py so the API and
+any other front-end share the exact same brain.
 
 Run:
-    MODEL_DEVICE=cpu python gradio_app.py          # loads the model directly
-    python gradio_app.py --share                   # public Gradio link
-
-Richer sources come from optional retrieval keys / index:
-    GOOGLE_FACTCHECK_API_KEY   (free 1k/day)  — real fact-check verdicts
-    NEWSAPI_KEY                (free 100/day)
-    a FAISS index built via  python speaker_scraper.py --build-faiss
-Wikipedia works with no key (needs `aiohttp`). Everything degrades gracefully.
+    MODEL_DEVICE=cpu python gradio_app.py
+    python gradio_app.py --share
 """
 from __future__ import annotations
 
 import argparse
-import asyncio
-import importlib.util
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -35,67 +23,10 @@ sys.path.insert(0, str(_HERE))
 
 import gradio as gr
 
-# ── cached model singletons (loaded on first message) ────────────────────────
-_MODEL = None
-_TOK = None
-_DEVICE = None
-_P5 = None
+from agent.pipeline import assess, is_factcheck
 
 
-def _load_once():
-    global _MODEL, _TOK, _DEVICE, _P5
-    if _MODEL is not None:
-        return
-    import torch
-    from transformers import AutoTokenizer
-
-    spec = importlib.util.spec_from_file_location("phase5", _HERE / "deberta_model.py")
-    _P5 = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(_P5)
-
-    _DEVICE = _P5.detect_device(os.environ.get("MODEL_DEVICE"))
-    tok_path = _HERE / "models" / "deberta_tokenizer"
-    wt_path  = _HERE / "models" / "deberta_best.pt"
-    if not tok_path.exists() or not wt_path.exists():
-        raise FileNotFoundError(
-            "models/deberta_best.pt or deberta_tokenizer/ not found — train "
-            "Phase 5 or copy the trained models/ folder in first.")
-
-    _TOK = AutoTokenizer.from_pretrained(str(tok_path), use_fast=False)
-    model = _P5.DeBERTaCredibilityModel()
-    ckpt = torch.load(wt_path, map_location=_DEVICE, weights_only=False)
-    model.load_state_dict(ckpt.get("model_state_dict", ckpt), strict=False)
-    model.to(_DEVICE).eval()
-    _MODEL = model
-    print(f"[gradio] model loaded on {_DEVICE}")
-
-
-def _score(text: str, speaker: str = "", context: str = "unknown") -> dict:
-    _load_once()
-    from data_pipeline import (
-        normalise_context, get_context_prior, extract_all_features)
-    ctx   = normalise_context(context)
-    prior = float(get_context_prior(ctx))
-    fd = extract_all_features(text, ctx)
-    fd["context_credibility_prior"] = prior
-    fd["token_length_approx"] = len(text) / 4.0
-    feats = [float(fd.get(c, 0.0)) for c in _P5.FEAT_COLS]
-    return _P5.predict_with_uncertainty(
-        _MODEL, _TOK, text, speaker, ctx, prior, feats, device=_DEVICE)
-
-
-async def _retrieve(text: str):
-    """Best-effort source retrieval via the agent (Wikipedia/FactCheck/FAISS/News)."""
-    try:
-        from agent.source_retrieval import retrieve_sources
-        return await retrieve_sources(text, k_each=4)
-    except Exception as e:
-        print(f"[gradio] retrieval unavailable: {e}")
-        return None
-
-
-# ── formatting ────────────────────────────────────────────────────────────────
-
+# ── verdict labels ──────────────────────────────────────────────────────────────
 def _verdict(score: float) -> tuple[str, str]:
     if score < 0.35:
         return "🔴", "Likely False"
@@ -104,25 +35,116 @@ def _verdict(score: float) -> tuple[str, str]:
     return "🟢", "Likely Credible"
 
 
+def _evidence_verdict(score: float) -> tuple[str, str]:
+    """Label for a verdict CONFIRMED against fact-checks by the stance model."""
+    if score < 0.35:
+        return "🔴", "False — per fact-checkers"
+    if score < 0.65:
+        return "🟡", "Mixed / Partly true — per fact-checkers"
+    return "🟢", "True — per fact-checkers"
+
+
+def _domain(url: str) -> str:
+    m = re.search(r"https?://(?:www\.)?([^/]+)", url or "")
+    return m.group(1) if m else ""
+
+
 def _meter(score: float, width: int = 20) -> str:
     filled = int(round(score * width))
     return "█" * filled + "░" * (width - filled)
 
 
-def _format_sources(bundle, low_credibility: bool) -> str:
+# ── source / evidence formatters ────────────────────────────────────────────────
+def _format_matches(matches: list[dict]) -> str:
+    """Fact-checks the stance model confirmed address THIS claim."""
+    lines = []
+    for m in matches[:3]:
+        who = _domain(m.get("url", "")) or m.get("source", "fact-check")
+        sc = m.get("score")
+        dot = " 🔴" if (sc is not None and sc < 0.4) else \
+              " 🟢" if (sc is not None and sc > 0.6) else " 🟡"
+        pct = int(round(m.get("nli_prob", 0.0) * 100))
+        reviewed = (m.get("title") or "").strip()
+        rating = (m.get("snippet") or "").strip()
+        url = m.get("url") or ""
+        link = f" — [link]({url})" if url else ""
+        head = f"- **{who}**{dot} (match {pct}%) reviewed *“{reviewed[:80]}”*"
+        if rating:
+            head += f" → {rating[:150]}"
+        lines.append(head + link)
+    return "\n".join(lines)
+
+
+def _format_factchecks(fc_srcs: list[dict]) -> str:
+    """Retrieved fact-checks with their REAL rating + citation (unconfirmed match)."""
+    lines = ["\n\n**⚖️ Published fact-checks on this topic** "
+             "(read them — they may not all address your exact claim):"]
+    for s in fc_srcs[:3]:
+        who = _domain(s.get("url", "")) or s.get("source", "fact-check")
+        sc = s.get("score")
+        dot = " 🔴" if (sc is not None and sc < 0.4) else \
+              " 🟢" if (sc is not None and sc > 0.6) else " 🟡"
+        reviewed = (s.get("title") or "").strip()
+        rating = (s.get("snippet") or "").strip()
+        url = s.get("url") or ""
+        link = f" — [link]({url})" if url else ""
+        head = f"- **{who}**{dot}"
+        if reviewed:
+            head += f" reviewed *“{reviewed[:90]}”*"
+        if rating:
+            head += f" → {rating[:180]}"
+        lines.append(head + link)
+    return "\n".join(lines)
+
+
+def _format_evidence(es, all_srcs: list[dict]) -> str:
+    """Support/refute leaning from news/wiki snippets (soft signal)."""
+    lean = {
+        "support": "🟢 leans toward **supporting** this claim",
+        "refute":  "🔴 leans toward **refuting** this claim",
+        "mixed":   "🟡 is **mixed** on this claim",
+    }[es.leaning]
+    lines = [f"\n\n**🔎 Retrieved evidence {lean}** "
+             f"({es.support} support / {es.refute} refute) — a soft signal from "
+             "news/encyclopedia snippets, **not** a fact-check verdict:"]
+    shown = set()
+    for i in es.items[:4]:
+        mark = "✅ supports" if i["stance"] == "support" else "❌ refutes"
+        who = i.get("source", "web").replace("_", " ").upper()
+        title = (i.get("title") or "").strip() or "(untitled)"
+        url = i.get("url") or ""
+        link = f" — [link]({url})" if url else ""
+        pct = int(round(i.get("nli_prob", 0.0) * 100))
+        lines.append(f"- {mark} ({pct}%) **[{who}]** {title}{link}")
+        if url:
+            shown.add(url)
+    rest = [s for s in all_srcs if (s.get("url") or "") not in shown][:3]
+    for s in rest:
+        who = s.get("source", "web").replace("_", " ").upper()
+        title = (s.get("title") or "").strip() or "(untitled)"
+        url = s.get("url") or ""
+        link = f" — [link]({url})" if url else ""
+        lines.append(f"- **[{who}]** {title}{link}")
+    return "\n".join(lines)
+
+
+def _format_sources(bundle, low_credibility: bool, exclude_fc: bool = False) -> str:
     if bundle is None or not getattr(bundle, "sources", None):
         return ("\n\n_No external sources retrieved (offline, or rate-limited). "
                 "Set `GOOGLE_FACTCHECK_API_KEY` / `NEWSAPI_KEY` or build the FAISS "
                 "index for fact-check verdicts._")
 
-    # Fact-check verdicts (with a numeric rating) first — those actually dispute
-    # or support the claim — then general evidence, capped at 5.
     srcs = bundle.sources
+    if exclude_fc:                       # fact-checks shown in their own panel
+        srcs = [s for s in srcs if not is_factcheck(s)]
+    if not srcs:
+        return ""
+
     rated = [s for s in srcs if s.get("score") is not None]
     other = [s for s in srcs if s.get("score") is None]
     ordered = (rated + other)[:5]
 
-    header = ("\n\n**🔎 Sources to check this claim against:**"
+    header = ("\n\n**🔎 Other sources to check this against:**"
               if low_credibility else "\n\n**🔎 Related sources:**")
     lines = [header]
     for s in ordered:
@@ -139,41 +161,70 @@ def _format_sources(bundle, low_credibility: bool) -> str:
     return "\n".join(lines)
 
 
+# ── respond: assess (the brain) → format (the UI) ──────────────────────────────
 async def respond(message: str, history):
-    msg = (message or "").strip()
-    if len(msg) < 12:
-        return ("👋 Paste a **news statement or article** (a full sentence or more) "
-                "and I'll rate how credible it is and point you to sources to check it.")
+    v = await assess(message)
 
-    # Score the core claim (long articles are truncated to the model's window).
-    claim = msg if len(msg) <= 1200 else msg[:1200]
-    r = _score(claim)
-    score, lo, hi = r["mean"], r["lower"], r["upper"]
-    emoji, label = _verdict(score)
+    if not v.ok:
+        if v.reason == "__too_short__":
+            return ("👋 Paste a **news statement or article** (a full sentence or "
+                    "more) and I'll rate how credible it is and point you to sources "
+                    "to check it.")
+        return (f"🤔 I can only score **factual claims** — {v.reason}.\n\n"
+                "Try a news-style statement, e.g. "
+                "*“The unemployment rate fell to a record low last month.”*")
 
-    reply = [
-        f"{emoji} **{label} — credibility {score:.2f} / 1.00**",
-        f"`{_meter(score)}`  (90% CI {lo:.2f}–{hi:.2f})",
-    ]
-    if score < 0.35:
-        reply.append("\nThis reads as **low-credibility** — the language and "
-                     "framing pattern-match claims fact-checkers rate false.")
-    elif score < 0.65:
-        reply.append("\nThis is **uncertain** — treat it as unverified until "
-                     "corroborated by the sources below.")
+    if v.tier == "factcheck":
+        emoji, label = _evidence_verdict(v.score)
+        conf = int(round(v.confidence * 100))
+        reply = [
+            f"{emoji} **{label}** — verdict {v.score:.2f} / 1.00",
+            f"`{_meter(v.score)}`",
+            f"\n✅ **Confirmed against {v.n_matched} fact-check"
+            f"{'s' if v.n_matched > 1 else ''}** a stance model verified address "
+            f"*this* claim (entailment {conf}%):",
+            _format_matches(v.matches),
+        ]
+        _, plabel = _verdict(v.prior)
+        note = f"\n_Model's stylistic prior (secondary): {v.prior:.2f} — {plabel}._"
+        if abs(v.prior - v.score) > 0.3:
+            note += (" ⚠️ The style guess disagrees with the evidence — "
+                     "**trust the fact-check.**")
+        reply.append(note)
+        reply.append(_format_sources(v.bundle, low_credibility=v.score < 0.5,
+                                     exclude_fc=True))
     else:
-        reply.append("\nThis reads as **plausible/credible**, but still worth "
-                     "confirming against the sources below.")
+        emoji, label = _verdict(v.prior)
+        reply = [
+            f"{emoji} **{label} — stylistic credibility {v.prior:.2f} / 1.00**",
+            f"`{_meter(v.prior)}`  (90% CI {v.lo:.2f}–{v.hi:.2f})",
+            "\n_This is the **model's stylistic estimate** — how the wording "
+            "compares to historically true/false claims. It is **not** a fact-check, "
+            "and the model has no knowledge of recent events._",
+        ]
+        if v.fc_srcs:
+            reply.append(_format_factchecks(v.fc_srcs))
+            if v.stance_available:
+                reply.append("\n_The stance model couldn't confirm any of these "
+                             "address your **exact** claim — read them yourself._")
 
-    bundle = await _retrieve(claim)
-    reply.append(_format_sources(bundle, low_credibility=score < 0.5))
-    reply.append("\n\n_ℹ️ The score reflects how fact-checkers would likely rate "
-                 "this claim, not absolute truth. Verify important claims yourself._")
+        if v.tier == "evidence":
+            reply.append(_format_evidence(v.evidence, v.other_srcs))
+        else:
+            if not v.fc_srcs:
+                reply.append("\n\n_No published fact-check matched this claim — treat "
+                             "it as **unverified** and weigh the sources below._")
+            reply.append(_format_sources(v.bundle, low_credibility=v.prior < 0.5,
+                                         exclude_fc=bool(v.fc_srcs)))
+
+    reply.append(
+        "\n\n_ℹ️ Confidence order: a **confirmed fact-check** verdict > a **support/"
+        "refute leaning** from news/encyclopedia evidence > the model's **stylistic "
+        "prior**. Always read the cited links._")
     return "\n".join(reply)
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
-
 EXAMPLES = [
     "Vaccines contain microchips that let the government track people.",
     "The unemployment rate fell to a record low last month.",
@@ -184,9 +235,6 @@ EXAMPLES = [
 
 
 def build_ui() -> gr.ChatInterface:
-    # Gradio 6 dropped the `type`/`theme` kwargs; Gradio 5 (what HF Spaces
-    # installs) still has `type` and needs "messages" to avoid the deprecated
-    # tuples format. Pass it only when the running version accepts it.
     import inspect
     kwargs = dict(
         fn=respond,
@@ -194,7 +242,9 @@ def build_ui() -> gr.ChatInterface:
         description=(
             "Paste a **news statement or article**. The bot returns a credibility "
             "score (0 = false, 1 = credible), a verdict with a confidence interval, "
-            "and sources to check the claim against."
+            "and sources to check the claim against. The score is a *stylistic* "
+            "signal learned from historical fact-checks — **not a real-time "
+            "fact-check** — so for current events, weigh the retrieved sources."
         ),
         examples=EXAMPLES,
     )

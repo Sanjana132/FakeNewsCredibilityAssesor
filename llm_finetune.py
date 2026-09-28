@@ -12,6 +12,8 @@
 ║   • Fine-tuned on DOMAIN DATA (fact-checking justifications), not        ║
 ║     generic RLHF — better calibration for this specific task             ║
 ║   • CUDA ONLY: BitsAndBytes NF4 has no MPS/CPU kernel                   ║
+║   • Auto-tunes to the GPU: T4 (fp16, batch=1, seq=512, grad-ckpt) or    ║
+║     A100 (bf16, batch=4, seq=1024). Fits free Colab T4.                 ║
 ║                                                                          ║
 ║  Training data:                                                          ║
 ║   • Primary:   LIAR-2 justifications (~23k pairs)                        ║
@@ -143,16 +145,45 @@ def _check_cuda():
     print(f"  GPU: {gpu}  ({vram:.1f} GB VRAM)")
 
 
-def load_base_model_and_tokenizer():
+def _gpu_profile():
+    """Auto-tune precision + memory settings to the detected GPU.
+
+    Turing cards (T4) have no bf16 hardware → must use fp16, and only ~16 GB
+    VRAM → small batch + shorter sequences. Ampere+ (A100) gets bf16 and can
+    afford the larger config. Returns a dict consumed by the loader/trainer.
+    """
+    import torch
+    bf16_ok = torch.cuda.is_bf16_supported()
+    vram = torch.cuda.get_device_properties(0).total_memory / 1e9
+    tight = vram < 24  # T4 (16 GB) and similar
+
+    prof = {
+        "compute_dtype": torch.bfloat16 if bf16_ok else torch.float16,
+        "bf16": bf16_ok,
+        "fp16": not bf16_ok,
+        "batch_size": 1 if tight else BATCH_SIZE,
+        "grad_accum": 16 if tight else GRAD_ACCUM,
+        "max_seq_len": 512 if tight else MAX_SEQ_LEN,
+        "grad_checkpointing": tight,
+    }
+    print(f"  Profile: {'fp16/T4-tight' if tight else 'bf16/A100'} "
+          f"→ batch={prof['batch_size']} accum={prof['grad_accum']} "
+          f"seq={prof['max_seq_len']} ckpt={prof['grad_checkpointing']}")
+    return prof
+
+
+def load_base_model_and_tokenizer(compute_dtype=None):
     """Load Mistral-7B in 4-bit NF4 with BitsAndBytes."""
     import torch
     from transformers import (AutoModelForCausalLM, AutoTokenizer,
                                BitsAndBytesConfig)
 
+    if compute_dtype is None:
+        compute_dtype = torch.bfloat16
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_compute_dtype=compute_dtype,
         bnb_4bit_use_double_quant=True,
     )
 
@@ -206,8 +237,13 @@ def train():
     val_ds   = dataset.filter(lambda x: x["split"] == "val")
     print(f"  Train: {len(train_ds):,}  Val: {len(val_ds):,}")
 
+    prof = _gpu_profile()
+
     print("\nLoading base model…")
-    model, tokenizer = load_base_model_and_tokenizer()
+    model, tokenizer = load_base_model_and_tokenizer(compute_dtype=prof["compute_dtype"])
+    if prof["grad_checkpointing"]:
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False})
     model = add_lora(model)
 
     collator = DataCollatorForCompletionOnlyLM(
@@ -218,15 +254,16 @@ def train():
     training_args = TrainingArguments(
         output_dir=str(ADAPTER_DIR / "checkpoints"),
         num_train_epochs=EPOCHS,
-        per_device_train_batch_size=BATCH_SIZE,
-        per_device_eval_batch_size=BATCH_SIZE,
-        gradient_accumulation_steps=GRAD_ACCUM,
+        per_device_train_batch_size=prof["batch_size"],
+        per_device_eval_batch_size=prof["batch_size"],
+        gradient_accumulation_steps=prof["grad_accum"],
+        gradient_checkpointing=prof["grad_checkpointing"],
         learning_rate=LR,
         warmup_ratio=WARMUP_RATIO,
         lr_scheduler_type="cosine",
         optim="paged_adamw_8bit",
-        fp16=False,
-        bf16=True,
+        fp16=prof["fp16"],
+        bf16=prof["bf16"],
         evaluation_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
@@ -244,7 +281,7 @@ def train():
         train_dataset=train_ds,
         eval_dataset=val_ds,
         dataset_text_field="text",
-        max_seq_length=MAX_SEQ_LEN,
+        max_seq_length=prof["max_seq_len"],
         data_collator=collator,
         args=training_args,
     )
@@ -270,10 +307,11 @@ def load_adapter_model():
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from peft import PeftModel
 
+    compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_compute_dtype=compute_dtype,
         bnb_4bit_use_double_quant=True,
     )
     base = AutoModelForCausalLM.from_pretrained(

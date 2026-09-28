@@ -7,6 +7,7 @@ sentencepiece
 protobuf
 huggingface_hub
 aiohttp
+sentence-transformers   # NLI stance model (Tier 2 claim-matching) + FAISS embeddings
 nltk
 vaderSentiment
 langdetect

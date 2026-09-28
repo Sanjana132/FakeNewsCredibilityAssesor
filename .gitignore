@@ -19,6 +19,10 @@ env/
 data/train.csv
 data/val.csv
 data/test.csv
+data/liar2_temporal_*.csv
+data/liar2_random_*.csv
+data/*.bak_temporal
+models/temporal_*_results.json
 models/*.pt
 models/*.pkl
 models/deberta_tokenizer/
@@ -42,3 +46,4 @@ deploy/hf_space/build/
 
 # Personal interview-prep notes (local only)
 INTERVIEW_*.md
+PROJECT_DOSSIER.md

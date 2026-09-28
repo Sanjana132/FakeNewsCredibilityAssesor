@@ -37,18 +37,29 @@ _STOPWORDS = {
 }
 
 
+# Tokens keep letters+digits+hyphens so salient terms like "5G", "COVID-19",
+# "H1N1", "9/11" survive — the old [A-Za-z]{3,} silently dropped them, which
+# gutted retrieval for exactly the claims that get fact-checked most.
+_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'-]*")
+
+
+def _is_content_token(w: str) -> bool:
+    return (len(w) >= 2 and any(c.isalpha() for c in w)   # drop bare numbers/'19'
+            and w not in _STOPWORDS)
+
+
 def _content_words(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z]{3,}", (text or "").lower())
-            if w not in _STOPWORDS}
+    return {w for w in (t.lower() for t in _TOKEN_RE.findall(text or ""))
+            if _is_content_token(w)}
 
 
 def _keywords(text: str, limit: int = 12) -> list[str]:
     """Ordered, de-duplicated content words — a focused search query."""
     seen: set[str] = set()
     out: list[str] = []
-    for w in re.findall(r"[A-Za-z]{3,}", text or ""):
+    for w in _TOKEN_RE.findall(text or ""):
         lw = w.lower()
-        if lw in _STOPWORDS or lw in seen:
+        if lw in seen or not _is_content_token(lw):
             continue
         seen.add(lw)
         out.append(w)
