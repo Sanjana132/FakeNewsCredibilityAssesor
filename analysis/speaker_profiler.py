@@ -46,7 +46,9 @@ from scipy.stats import pearsonr
 
 warnings.filterwarnings("ignore")
 
-_HERE    = Path(__file__).resolve().parent
+import sys
+_HERE    = Path(__file__).resolve().parent.parent  # repo root (script now lives in training/ or analysis/)
+sys.path.insert(0, str(_HERE))
 DATA_DIR  = _HERE / "data"
 MODEL_DIR = _HERE / "models"
 EDA_DIR   = _HERE / "eda_output"

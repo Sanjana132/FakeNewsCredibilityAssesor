@@ -36,7 +36,9 @@ from pathlib import Path
 from typing import Iterator
 from urllib.parse import urljoin, urlparse
 
-_HERE    = Path(__file__).resolve().parent
+import sys
+_HERE    = Path(__file__).resolve().parent.parent  # repo root (script now lives in training/ or analysis/)
+sys.path.insert(0, str(_HERE))
 DATA_DIR  = _HERE / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 

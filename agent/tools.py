@@ -170,7 +170,7 @@ def _strip_html(text: str) -> str:
 
 class FAISSTool:
     """
-    Query the local FAISS index built by speaker_scraper.py.
+    Query the local FAISS index built by analysis/speaker_scraper.py.
     Uses all-MiniLM-L6-v2 to embed the query and performs cosine search.
     Falls back gracefully if index file is absent.
     """

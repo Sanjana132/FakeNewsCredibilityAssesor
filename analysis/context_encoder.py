@@ -30,7 +30,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-_HERE    = Path(__file__).resolve().parent
+_HERE    = Path(__file__).resolve().parent.parent  # repo root (script now lives in training/ or analysis/)
 DATA_DIR  = _HERE / "data"
 MODEL_DIR = _HERE / "models"
 EDA_DIR   = _HERE / "eda_output"

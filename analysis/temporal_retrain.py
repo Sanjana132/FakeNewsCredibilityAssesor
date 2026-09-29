@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-_HERE = Path(__file__).resolve().parent
+_HERE = Path(__file__).resolve().parent.parent  # repo root (script now lives in training/ or analysis/)
 sys.path.insert(0, str(_HERE))
 DATA = _HERE / "data"
 MODELS = _HERE / "models"

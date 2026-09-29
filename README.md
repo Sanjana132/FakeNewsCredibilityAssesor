@@ -144,17 +144,18 @@ Context priors are computed with **Bayesian shrinkage from the training split on
 | Component | Module(s) | Purpose |
 |-----------|-----------|---------|
 | Data pipeline | `data_pipeline.py` | Load/merge datasets, normalise context, engineer 13 features, EDA |
-| Baseline | `baseline_model.py` | TF-IDF + Ridge regressor + SHAP (the MAE benchmark) |
 | Credibility model | `deberta_model.py` | DeBERTa-v3 fine-tuning, fusion head, MC-Dropout intervals |
-| Calibration | `calibration.py` | Reliability diagram, ECE, temperature scaling |
-| Source profiles | `context_encoder.py`, `speaker_profiler.py` | Learned context embeddings, Bayesian speaker credibility |
-| Explainability | `shap_explainer.py` | Token-level SHAP attributions |
-| Justification LLM | `llm_finetune.py` | Mistral-7B QLoRA evidence-grounded justifications |
-| Retrieval agent | `agent/` | LangGraph pipeline + 4 evidence-retrieval tools |
-| Serving API | `api/` | Hardened FastAPI service (auth, rate limiting, Redis cache, SSE) |
-| Chatbot demo | `gradio_app.py` | Conversational UI (score + verdict + sources) |
-| Evidence scraper | `speaker_scraper.py` | PolitiFact/Snopes metadata → FAISS index |
-| Infrastructure | `Dockerfile.*`, `docker-compose.yml` | Containerised API / LLM / demo stack |
+| Calibration | `calibration.py` | Reliability diagram, ECE, split-conformal intervals |
+| **Agent pipeline** | `agent/pipeline.py` | The brain: gate → score → retrieve → NLI-confirm → verdict |
+| Retrieval + stance | `agent/tools.py`, `agent/source_retrieval.py`, `agent/stance.py` | 4 evidence tools + NLI claim-matching / support-refute |
+| Chatbot demo | `gradio_app.py` | Conversational UI over `pipeline.assess` |
+| Deploy | `deploy/hf_space/` | Hugging Face Spaces (Gradio) |
+| Baseline (train) | `training/baseline_model.py` | TF-IDF + Ridge regressor (the MAE benchmark) |
+| Justification LLM (train) | `training/llm_finetune.py` | Mistral-7B QLoRA evidence-grounded justifications |
+| Explainability (analysis) | `analysis/shap_explainer.py` | Token-level SHAP attributions |
+| Source profiles (analysis) | `analysis/context_encoder.py`, `analysis/speaker_profiler.py` | Context embeddings, Bayesian speaker credibility |
+| Evidence scraper (analysis) | `analysis/speaker_scraper.py` | PolitiFact/Snopes metadata → FAISS index |
+| Temporal drift (analysis) | `analysis/temporal_eval.py`, `analysis/temporal_retrain.py` | Measure the drift a random split hides |
 | Core | `config.py`, `utils/`, `tests/`, `.github/` | Config, seeding, 80 tests, CI |
 
 ---
@@ -168,8 +169,8 @@ git clone https://github.com/Sanjana132/FakeNewsCredibilityAssesor.git
 cd FakeNewsCredibilityAssesor
 pip install -r requirements.api.txt
 python -m nltk.downloader stopwords punkt punkt_tab opinion_lexicon
-python data_pipeline.py        # load 4 datasets, engineer features, run EDA
-python baseline_model.py       # TF-IDF + Ridge baseline
+python data_pipeline.py             # load 4 datasets, engineer features, run EDA
+python training/baseline_model.py   # TF-IDF + Ridge baseline
 ```
 
 **Train the credibility model** (GPU) — the `colab_train_from_git.ipynb` notebook
