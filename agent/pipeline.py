@@ -133,6 +133,50 @@ def is_factcheck(s: dict) -> bool:
     return s.get("source") in ("google_fc", "faiss") and s.get("score") is not None
 
 
+# ── optional LLM justification (dormant until the adapter is trained) ───────────
+# Generating a natural-language explanation needs the Mistral QLoRA adapter, which
+# is CUDA-only. It is OFF by default (ENABLE_JUSTIFIER=1 to turn on) so the CPU /
+# HF-Spaces demo is never affected, and it degrades to "" whenever the adapter is
+# missing or the model can't load.
+_JUST_MOD = None
+_JUST_TRIED = False
+
+
+def _label(score: float) -> str:
+    if score < 0.35:
+        return "false"
+    if score < 0.65:
+        return "mixed/partially true"
+    return "true"
+
+
+def _generate_justification(claim: str, score: float, label: str) -> str:
+    global _JUST_MOD, _JUST_TRIED
+    if os.environ.get("ENABLE_JUSTIFIER", "0") != "1":
+        return ""
+    if not (_HERE / "models" / "mistral_adapter").exists():
+        return ""
+    if not _JUST_TRIED:
+        _JUST_TRIED = True
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "llm_finetune", _HERE / "training" / "llm_finetune.py")
+            _JUST_MOD = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(_JUST_MOD)
+        except Exception as e:
+            print(f"[pipeline] justifier unavailable: {e}")
+            _JUST_MOD = None
+    if _JUST_MOD is None:
+        return ""
+    try:
+        text = _JUST_MOD.generate_explanation(claim, score=score, label=label)
+        # llm_finetune returns a placeholder string when the adapter is absent
+        return "" if text.startswith("[LLM adapter not available") else text
+    except Exception as e:
+        print(f"[pipeline] justification failed: {e}")
+        return ""
+
+
 # ── the verdict ─────────────────────────────────────────────────────────────────
 @dataclass
 class Verdict:
@@ -151,6 +195,7 @@ class Verdict:
     evidence: object = None               # stance.EvidenceStance (leaning) or None
     stance_available: bool = False        # did the NLI model load?
     bundle: object = None                 # raw EvidenceBundle
+    justification: str = ""               # optional LLM explanation (if enabled+trained)
 
 
 async def assess(claim_text: str) -> Verdict:
@@ -179,18 +224,22 @@ async def assess(claim_text: str) -> Verdict:
         st = stance.assess(claim, fc_srcs)
 
     if st is not None and st.available and st.verdict is not None:
-        return Verdict(
+        v = Verdict(
             ok=True, tier="factcheck", score=st.verdict, prior=prior, lo=lo, hi=hi,
             confidence=st.confidence, n_matched=st.n_matched, matches=st.matches,
             other_srcs=other_srcs, bundle=bundle, stance_available=True)
+    else:
+        # 3. no confirmed fact-check → soft evidence leaning, else stylistic prior
+        es = None
+        if other_srcs:
+            from agent import stance
+            es = stance.assess_evidence(claim, other_srcs)
+        tier = "evidence" if (es is not None and es.available and es.leaning) else "stylistic"
+        v = Verdict(
+            ok=True, tier=tier, score=prior, prior=prior, lo=lo, hi=hi,
+            fc_srcs=fc_srcs, other_srcs=other_srcs, evidence=es, bundle=bundle,
+            stance_available=(st.available if st is not None else False))
 
-    # 3. no confirmed fact-check → soft evidence leaning, else stylistic prior
-    es = None
-    if other_srcs:
-        from agent import stance
-        es = stance.assess_evidence(claim, other_srcs)
-    tier = "evidence" if (es is not None and es.available and es.leaning) else "stylistic"
-    return Verdict(
-        ok=True, tier=tier, score=prior, prior=prior, lo=lo, hi=hi,
-        fc_srcs=fc_srcs, other_srcs=other_srcs, evidence=es, bundle=bundle,
-        stance_available=(st.available if st is not None else False))
+    # 4. optional natural-language justification (dormant unless enabled + trained)
+    v.justification = _generate_justification(claim, v.score, _label(v.score))
+    return v

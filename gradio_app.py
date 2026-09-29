@@ -217,6 +217,9 @@ async def respond(message: str, history):
             reply.append(_format_sources(v.bundle, low_credibility=v.prior < 0.5,
                                          exclude_fc=bool(v.fc_srcs)))
 
+    if v.justification:
+        reply.append(f"\n\n**💬 Explanation:** {v.justification}")
+
     reply.append(
         "\n\n_ℹ️ Confidence order: a **confirmed fact-check** verdict > a **support/"
         "refute leaning** from news/encyclopedia evidence > the model's **stylistic "
