@@ -33,10 +33,13 @@ Install:
     pip install transformers peft trl bitsandbytes accelerate sentencepiece
     pip install evaluate rouge-score bert-score
 
-Run:
-    python llm_finetune.py --train
-    python llm_finetune.py --generate --claim "Obama doubled the deficit"
-    python llm_finetune.py --eval-rouge   # ROUGE-L on val set
+Run (from repo root):
+    python training/llm_finetune.py --train                 # auto-profiles T4/A100
+    python training/llm_finetune.py --train --epochs 1       # T4: stay under 12h cap
+    python training/llm_finetune.py --train --base TinyLlama/TinyLlama-1.1B-Chat-v1.0
+                                                             # tiny fallback, easy T4 fit
+    python training/llm_finetune.py --generate --claim "Obama doubled the deficit"
+    python training/llm_finetune.py --eval-rouge             # ROUGE-L on val set
 """
 
 from __future__ import annotations
@@ -426,10 +429,26 @@ def main():
                     help="ROUGE-L on val set")
     ap.add_argument("--n-samples", type=int, default=200,
                     help="Samples for ROUGE eval")
+    ap.add_argument("--epochs", type=int, default=None,
+                    help="Override epochs (use --epochs 1 on a T4 to stay under "
+                         "Colab's session cap)")
+    ap.add_argument("--base", default=None,
+                    help="Override base model (e.g. a 1–3B instruct model like "
+                         "TinyLlama/TinyLlama-1.1B-Chat-v1.0 for an easy T4 fit)")
     args = ap.parse_args()
+
+    # Script-level config overrides (train() reads these module globals).
+    global EPOCHS, BASE_MODEL, ADAPTER_DIR
+    if args.epochs is not None:
+        EPOCHS = args.epochs
+    if args.base:
+        BASE_MODEL = args.base
+        # keep adapters for different bases from clobbering each other
+        ADAPTER_DIR = MODEL_DIR / f"adapter_{args.base.split('/')[-1]}"
 
     print("=" * 60)
     print("  PHASE 7 — Mistral-7B QLoRA Fine-Tuning")
+    print(f"  base={BASE_MODEL}  epochs={EPOCHS}  adapter→{ADAPTER_DIR.name}")
     print("=" * 60)
 
     if args.train:
